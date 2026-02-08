@@ -1,0 +1,42 @@
+# 智链预测 - 项目依赖配置
+# Python 3.10+
+
+# ===== 核心框架 =====
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+python-dotenv>=1.0.0
+
+# ===== DeepSeek/OpenAI API =====
+openai>=1.10.0
+httpx>=0.26.0
+
+# ===== 数据获取与处理 =====
+python-binance>=1.0.19
+ccxt>=4.2.0
+pandas>=2.1.0
+numpy>=1.26.0
+
+# ===== 技术指标计算 =====
+ta>=0.11.0
+pandas-ta>=0.3.14b
+
+# ===== 数据库 =====
+sqlalchemy[asyncio]>=2.0.25
+asyncpg>=0.29.0
+redis>=5.0.0
+influxdb-client>=1.40.0
+
+# ===== 异步与并发 =====
+aiohttp>=3.9.0
+websockets>=12.0
+
+# ===== 工具库 =====
+loguru>=0.7.0
+tenacity>=8.2.0
+orjson>=3.9.0
+
+# ===== 测试 =====
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0

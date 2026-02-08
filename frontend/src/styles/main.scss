@@ -1,0 +1,513 @@
+/**
+ * 智链预测 - 全局样式 v2.0
+ * Premium Dark Theme with Glassmorphism
+ */
+@use './variables.scss' as *;
+
+@import "tailwindcss";
+
+
+// ============================================================
+// 字体导入
+// ============================================================
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans:wght@400;500;600;700&family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400;500;600;700&display=swap');
+
+// ============================================================
+// CSS 重置
+// ============================================================
+
+*,
+*::before,
+*::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html {
+    font-size: 16px;
+    scroll-behavior: smooth;
+}
+
+body {
+    font-family: $font-sans;
+    background: $bg-base;
+    color: $text-primary;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    min-height: 100vh;
+    overflow-x: hidden;
+}
+
+// 背景装饰层
+body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.15), transparent),
+        radial-gradient(ellipse 60% 40% at 100% 0%, rgba(168, 85, 247, 0.1), transparent),
+        radial-gradient(ellipse 50% 30% at 0% 100%, rgba(34, 197, 94, 0.08), transparent);
+    pointer-events: none;
+    z-index: -1;
+}
+
+// ============================================================
+// Glassmorphism Mixins
+// ============================================================
+
+@mixin glass-card {
+    background: $bg-surface-2;
+    backdrop-filter: blur($blur-md);
+    -webkit-backdrop-filter: blur($blur-md);
+    border: 1px solid $border-default;
+    border-radius: $radius-lg;
+}
+
+@mixin glass-card-hover {
+    background: $bg-surface-3;
+    border-color: $border-strong;
+    box-shadow: $shadow-md;
+}
+
+@mixin gradient-border($gradient) {
+    position: relative;
+    background: $bg-surface-2;
+    border: none;
+
+    &::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        padding: 1px;
+        border-radius: inherit;
+        background: $gradient;
+        -webkit-mask:
+            linear-gradient(#fff 0 0) content-box,
+            linear-gradient(#fff 0 0);
+        mask:
+            linear-gradient(#fff 0 0) content-box,
+            linear-gradient(#fff 0 0);
+        -webkit-mask-composite: xor;
+        mask-composite: exclude;
+        pointer-events: none;
+    }
+}
+
+@mixin glow-effect($color) {
+    box-shadow: 0 0 20px $color, 0 0 40px rgba($color, 0.3);
+}
+
+// ============================================================
+// 通用组件类
+// ============================================================
+
+// 毛玻璃卡片
+.glass-card {
+    @include glass-card;
+    transition: all $transition-normal;
+
+    &:hover {
+        @include glass-card-hover;
+        transform: translateY(-2px);
+    }
+}
+
+// 渐变边框卡片
+.gradient-border {
+    @include gradient-border($gradient-border-primary);
+}
+
+.gradient-border-bullish {
+    @include gradient-border($gradient-border-bullish);
+}
+
+.gradient-border-bearish {
+    @include gradient-border($gradient-border-bearish);
+}
+
+// 发光按钮
+.glow-button {
+    position: relative;
+    background: $gradient-primary;
+    border: none;
+    border-radius: $radius-md;
+    color: white;
+    font-weight: 600;
+    padding: $spacing-md $spacing-xl;
+    cursor: pointer;
+    transition: all $transition-normal;
+
+    &::before {
+        content: '';
+        position: absolute;
+        inset: -2px;
+        background: $gradient-primary;
+        border-radius: inherit;
+        filter: blur(12px);
+        opacity: 0;
+        transition: opacity $transition-normal;
+        z-index: -1;
+    }
+
+    &:hover {
+        transform: translateY(-2px);
+
+        &::before {
+            opacity: 0.6;
+        }
+    }
+
+    &:active {
+        transform: translateY(0);
+    }
+}
+
+// 渐变文字
+.gradient-text {
+    background: $gradient-primary;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.gradient-text-success {
+    background: $gradient-success;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+// 状态颜色类
+.text-bullish {
+    color: $color-bullish !important;
+}
+
+.text-bearish {
+    color: $color-danger !important;
+}
+
+.text-neutral {
+    color: $color-neutral !important;
+}
+
+.text-muted {
+    color: $text-muted !important;
+}
+
+.bg-bullish {
+    background: rgba($color-bullish, 0.15) !important;
+}
+
+.bg-bearish {
+    background: rgba($color-danger, 0.15) !important;
+}
+
+// ============================================================
+// Element Plus 主题覆盖
+// ============================================================
+
+:root {
+    --el-bg-color: #{$bg-surface-1};
+    --el-bg-color-overlay: #{$bg-surface-2};
+    --el-bg-color-page: #{$bg-base};
+    --el-text-color-primary: #{$text-primary};
+    --el-text-color-regular: #{$text-secondary};
+    --el-text-color-secondary: #{$text-muted};
+    --el-text-color-placeholder: #{$text-disabled};
+    --el-border-color: #{$border-default};
+    --el-border-color-light: #{$border-subtle};
+    --el-fill-color: #{$bg-glass};
+    --el-fill-color-light: rgba(255, 255, 255, 0.02);
+    --el-color-primary: #{$color-primary};
+    --el-color-success: #{$color-success};
+    --el-color-danger: #{$color-danger};
+    --el-color-warning: #{$color-warning};
+}
+
+// 卡片
+.el-card {
+    @include glass-card;
+
+    &.is-always-shadow,
+    &.is-hover-shadow:hover {
+        box-shadow: $shadow-md;
+    }
+
+    .el-card__header {
+        border-bottom: 1px solid $border-subtle;
+        padding: $spacing-md $spacing-lg;
+    }
+
+    .el-card__body {
+        padding: $spacing-lg;
+    }
+}
+
+// 按钮
+.el-button {
+    border-radius: $radius-md;
+    font-weight: 500;
+    transition: all $transition-normal;
+
+    &--primary {
+        background: $gradient-primary;
+        border: none;
+
+        &:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+            box-shadow: $shadow-glow-primary;
+        }
+    }
+
+    &--success {
+        background: $gradient-success;
+        border: none;
+
+        &:hover {
+            box-shadow: $shadow-glow-success;
+        }
+    }
+
+    &--danger {
+        background: $gradient-danger;
+        border: none;
+
+        &:hover {
+            box-shadow: $shadow-glow-danger;
+        }
+    }
+}
+
+// 输入框
+.el-input__wrapper {
+    background: $bg-glass;
+    border: 1px solid $border-default;
+    border-radius: $radius-md;
+    transition: all $transition-normal;
+
+    &:hover {
+        border-color: $border-strong;
+    }
+
+    &.is-focus {
+        border-color: $color-primary;
+        box-shadow: 0 0 0 3px rgba($color-primary, 0.15);
+    }
+}
+
+// 选择器
+.el-select-dropdown {
+    @include glass-card;
+}
+
+.el-select-dropdown__item {
+    &.selected {
+        color: $color-primary;
+        font-weight: 600;
+    }
+
+    &:hover {
+        background: $bg-surface-3;
+    }
+}
+
+// 标签
+.el-tag {
+    border-radius: $radius-sm;
+    border: none;
+
+    &--success {
+        background: rgba($color-success, 0.15);
+        color: $color-success;
+    }
+
+    &--danger {
+        background: rgba($color-danger, 0.15);
+        color: $color-danger;
+    }
+
+    &--warning {
+        background: rgba($color-warning, 0.15);
+        color: $color-warning;
+    }
+
+    &--info {
+        background: rgba($color-info, 0.2);
+        color: $text-secondary;
+    }
+}
+
+// 步骤条
+.el-steps {
+    .el-step__head.is-finish {
+        color: $color-success;
+        border-color: $color-success;
+    }
+
+    .el-step__head.is-process {
+        color: $color-primary;
+        border-color: $color-primary;
+    }
+}
+
+// 进度条
+.el-progress-bar__outer {
+    background: $bg-surface-3;
+    border-radius: $radius-full;
+}
+
+.el-progress-bar__inner {
+    border-radius: $radius-full;
+}
+
+// ============================================================
+// 滚动条
+// ============================================================
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: $border-default;
+    border-radius: $radius-full;
+
+    &:hover {
+        background: $border-strong;
+    }
+}
+
+// ============================================================
+// 动画关键帧
+// ============================================================
+
+@keyframes pulse-glow {
+
+    0%,
+    100% {
+        opacity: 1;
+        filter: brightness(1);
+    }
+
+    50% {
+        opacity: 0.8;
+        filter: brightness(1.2);
+    }
+}
+
+@keyframes float {
+
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-8px);
+    }
+}
+
+@keyframes gradient-shift {
+    0% {
+        background-position: 0% 50%;
+    }
+
+    50% {
+        background-position: 100% 50%;
+    }
+
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+@keyframes shimmer {
+    0% {
+        background-position: -200% 0;
+    }
+
+    100% {
+        background-position: 200% 0;
+    }
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+// 动画类
+.animate-pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.animate-float {
+    animation: float 3s ease-in-out infinite;
+}
+
+.animate-shimmer {
+    background: linear-gradient(90deg,
+            transparent 0%,
+            rgba(255, 255, 255, 0.1) 50%,
+            transparent 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+}
+
+.animate-spin {
+    animation: spin 1s linear infinite;
+}
+
+// ============================================================
+// 工具类
+// ============================================================
+
+.mono {
+    font-family: $font-mono;
+    font-variant-numeric: tabular-nums;
+}
+
+.font-tabular {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+}
+
+.font-display {
+    font-family: $font-display;
+    letter-spacing: -0.02em;
+}
+
+.truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
+}

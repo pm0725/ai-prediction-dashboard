@@ -1,0 +1,166 @@
+// ============================================================
+// 智链预测 - 设计系统 v2.0
+// Premium Dark Theme with Glassmorphism
+// ============================================================
+
+// ============================================================
+// 品牌色系
+// ============================================================
+
+// 主色调 - 科技蓝紫
+$color-primary: #6366f1;
+$color-primary-light: #818cf8;
+$color-primary-dark: #4f46e5;
+$color-primary-glow: rgba(99, 102, 241, 0.5);
+
+// 功能色
+$color-success: #22c55e;
+$color-success-light: #4ade80;
+$color-success-glow: rgba(34, 197, 94, 0.5);
+
+$color-danger: #ef4444;
+$color-danger-light: #f87171;
+$color-danger-glow: rgba(239, 68, 68, 0.5);
+
+$color-warning: #f59e0b;
+$color-warning-light: #fbbf24;
+
+$color-info: #64748b;
+
+// 预测方向色 (重要：交易核心色)
+$color-bullish: #22c55e; // 看涨绿
+$color-bullish-glow: rgba(34, 197, 94, 0.6);
+$color-bearish: #ef4444; // 看跌红
+$color-bearish-glow: rgba(239, 68, 68, 0.6);
+$color-neutral: #64748b; // 中性灰
+
+// ============================================================
+// 渐变系统
+// ============================================================
+
+$gradient-primary: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+$gradient-success: linear-gradient(135deg, #22c55e 0%, #10b981 100%);
+$gradient-danger: linear-gradient(135deg, #ef4444 0%, #f97316 100%);
+$gradient-premium: linear-gradient(135deg, #f59e0b 0%, #eab308 50%, #fbbf24 100%);
+$gradient-dark: linear-gradient(180deg, #0f0f1a 0%, #1a1a2e 100%);
+
+// 边框渐变 (用于卡片高亮)
+$gradient-border-bullish: linear-gradient(135deg, #22c55e, #10b981);
+$gradient-border-bearish: linear-gradient(135deg, #ef4444, #f97316);
+$gradient-border-primary: linear-gradient(135deg, #6366f1, #a855f7);
+
+// ============================================================
+// 背景层次系统 (从深到浅)
+// ============================================================
+
+$bg-base: #0a0a0f; // 最底层背景
+$bg-surface-1: rgba(15, 15, 26, 0.95); // 主要表面
+$bg-surface-2: rgba(26, 26, 46, 0.8); // 卡片背景
+$bg-surface-3: rgba(38, 38, 66, 0.6); // 悬浮/选中
+$bg-glass: rgba(255, 255, 255, 0.03); // 毛玻璃层
+
+// ============================================================
+// 边框系统
+// ============================================================
+
+$border-subtle: rgba(255, 255, 255, 0.06);
+$border-default: rgba(255, 255, 255, 0.1);
+$border-strong: rgba(255, 255, 255, 0.15);
+$border-glow: rgba(99, 102, 241, 0.3);
+
+// ============================================================
+// 文字层次
+// ============================================================
+
+$text-primary: #f1f5f9;
+$text-secondary: rgba(241, 245, 249, 0.7);
+$text-muted: rgba(241, 245, 249, 0.4);
+$text-disabled: rgba(241, 245, 249, 0.2);
+
+// ============================================================
+// 间距系统
+// ============================================================
+
+$spacing-xs: 4px;
+$spacing-sm: 8px;
+$spacing-md: 16px;
+$spacing-lg: 24px;
+$spacing-xl: 32px;
+$spacing-2xl: 48px;
+$spacing-3xl: 64px;
+
+// ============================================================
+// 圆角系统
+// ============================================================
+
+$radius-sm: 8px;
+$radius-md: 12px;
+$radius-lg: 16px;
+$radius-xl: 24px;
+$radius-full: 9999px;
+
+// ============================================================
+// 阴影系统
+// ============================================================
+
+$shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+$shadow-md: 0 8px 24px rgba(0, 0, 0, 0.3);
+$shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.4);
+$shadow-glow-primary: 0 0 20px $color-primary-glow;
+$shadow-glow-success: 0 0 20px $color-success-glow;
+$shadow-glow-danger: 0 0 20px $color-danger-glow;
+
+// ============================================================
+// 动画时间
+// ============================================================
+
+$transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+$transition-normal: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+$transition-slow: 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+$transition-bounce: 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+// ============================================================
+// 字体
+// ============================================================
+
+$font-sans: 'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+$font-mono: 'Roboto Mono', 'JetBrains Mono', 'Fira Code', 'Menlo', 'Monaco', 'Courier New', monospace;
+$font-display: 'Inter', 'Outfit', sans-serif;
+
+// Global typography styles
+body {
+    font-family: $font-sans;
+    background: $bg-base;
+    color: $text-primary;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    min-height: 100vh;
+    overflow-x: hidden;
+}
+
+.mono {
+    font-family: $font-mono;
+    font-feature-settings: "tnum";
+    font-variant-numeric: tabular-nums;
+}
+
+.font-tabular {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+}
+
+.font-display {
+    font-family: $font-display;
+    letter-spacing: -0.02em;
+}
+
+// ============================================================
+// 模糊效果
+// ============================================================
+
+$blur-sm: 8px;
+$blur-md: 16px;
+$blur-lg: 24px;
+$blur-xl: 40px;
