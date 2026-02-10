@@ -47,7 +47,7 @@ function showError(msg: any) {
     document.body.appendChild(errorBox);
 }
 
-window.onerror = function (message, source, lineno, colno, error) {
+window.onerror = function (message, _source, _lineno, _colno, error) {
     // Ignore benign ResizeObserver error
     if (String(message).includes('ResizeObserver loop completed with undelivered notifications')) {
         return;

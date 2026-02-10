@@ -224,7 +224,7 @@ import { usePredictionStore } from '@/stores/usePredictionStore'
 import AIPredictionCard from '@/components/AIPredictionCard.vue'
 import PredictionWizard from '@/components/PredictionWizard.vue'
 
-const router = useRouter()
+
 const predictionStore = usePredictionStore()
 
 const selectedTimeframe = ref('4h')

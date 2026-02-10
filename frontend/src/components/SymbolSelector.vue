@@ -91,7 +91,7 @@ const timeframes = [
   { value: '1d', label: '日线', description: '趋势' }
 ]
 
-import type { SymbolInfo } from '@/services/api' // Keeping import as it might be used elsewhere or good for ref, actually linter said unused. But wait, I can just remove it from the props definition which I did.
+
 // Let's remove the import if it's truly unused.
 // Actually, simple fix for the filter callbacks first.
 

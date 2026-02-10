@@ -99,7 +99,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { reactive, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { Aim, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'

@@ -949,7 +949,7 @@ async function loadKlineData(tf: string) {
     // 检查 symbol 是否一致，或者数据为空
     if (marketStore.klines.length === 0 || props.symbol !== marketStore.currentSymbol) {
       if (props.symbol !== marketStore.currentSymbol) {
-        marketStore.setSymbol(props.symbol)
+        marketStore.selectSymbol(props.symbol)
       }
       // Use the passed timeframe
       console.log('Loading data for timeframe:', tf) 
@@ -996,7 +996,6 @@ function updateChartData() {
 }
 
 function updateAIOverlay() {
-  const context = marketStore.marketContext
   const pred = marketStore.prediction
   const lastPrice = currentPrice.value
 
