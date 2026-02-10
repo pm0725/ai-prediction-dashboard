@@ -108,7 +108,7 @@
                 <div class="indicators-mini font-tabular" v-if="prediction.indicators">
                   <div class="indicator-chip" v-for="(value, key) in prediction.indicators" :key="key">
                     <span class="chip-label font-display">{{ key }}</span>
-                    <span class="chip-value" :class="getIndicatorClass(key, value as any)">{{ formatIndicator(value as any) }}</span>
+                    <span class="chip-value" :class="getIndicatorClass(String(key), value as any)">{{ formatIndicator(value as any) }}</span>
                   </div>
                 </div>
               </div>
