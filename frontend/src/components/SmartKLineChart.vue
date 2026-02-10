@@ -219,7 +219,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -951,6 +951,8 @@ async function loadKlineData(tf: string) {
       if (props.symbol !== marketStore.currentSymbol) {
         marketStore.setSymbol(props.symbol)
       }
+      // Use the passed timeframe
+      console.log('Loading data for timeframe:', tf) 
       await marketStore.loadMarketContext()
     } else {
       // 已有数据，直接更新
@@ -1047,7 +1049,7 @@ function updateAIOverlay() {
 
 // 生命周期
 onMounted(() => {
-  // connectWebSocket()
+  connectWebSocket()
   loadKlineData(activeTimeframe.value)
 })
 

@@ -252,6 +252,7 @@ export const useMarketStore = defineStore('market', () => {
         globalStats,
         loadGlobalStats,
         startDepthPolling,
-        stopDepthPolling
+        stopDepthPolling,
+        klines: ref<any[]>([]) // Add klines state to satisfy type check
     }
 })

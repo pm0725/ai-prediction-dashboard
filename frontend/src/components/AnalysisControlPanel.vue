@@ -707,7 +707,7 @@ const getConfig = () => ({
 
 
 import { usePredictionStore } from '@/stores/usePredictionStore'
-import { Select, RefreshRight, Download, Setting, Coin, Close } from '@element-plus/icons-vue' // Add Select icon
+import { Select } from '@element-plus/icons-vue'
 
 const predictionStore = usePredictionStore()
 

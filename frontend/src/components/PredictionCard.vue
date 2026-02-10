@@ -508,10 +508,11 @@ function formatFundFlow(value: number): string {
   return value.toFixed(2)
 }
 
-function getIndicatorClass(key: string, value: number): string {
+function getIndicatorClass(key: string, value: number | string): string {
+  const numValue = typeof value === 'string' ? parseFloat(value) : value
   if (key.toUpperCase() === 'RSI') {
-    if (value < 30) return 'oversold'
-    if (value > 70) return 'overbought'
+    if (numValue < 30) return 'oversold'
+    if (numValue > 70) return 'overbought'
   }
   return ''
 }
