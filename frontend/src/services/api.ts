@@ -7,7 +7,7 @@ import { ElMessage } from 'element-plus'
 
 // 创建axios实例
 const api: AxiosInstance = axios.create({
-    baseURL: '/api',
+    baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
     timeout: 300000, // 5分钟超时，AI深度思考可能需要较长时间
     headers: {
         'Content-Type': 'application/json'
