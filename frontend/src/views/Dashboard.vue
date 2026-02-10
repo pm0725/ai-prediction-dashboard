@@ -29,17 +29,17 @@
             <el-icon><MagicStick /></el-icon>
             <span>开始 AI 分析</span>
           </button>
-          <button class="glow-button secondary" @click="handleBatchScan" :disabled="marketStore.loading.batch">
-            <el-icon v-if="!marketStore.loading.batch"><Aim /></el-icon>
+          <button class="glow-button secondary" @click="handleBatchScan" :disabled="predictionStore.loading.batch">
+            <el-icon v-if="!predictionStore.loading.batch"><Aim /></el-icon>
             <el-icon v-else class="animate-spin"><Loading /></el-icon>
-            <span>{{ marketStore.loading.batch ? '扫描中...' : '全场扫描' }}</span>
+            <span>{{ predictionStore.loading.batch ? '扫描中...' : '全场扫描' }}</span>
           </button>
         </div>
       </div>
       <div class="hero-visual">
         <div class="stats-ring">
           <div class="ring-content">
-            <span class="ring-value">{{ Object.keys(marketStore.batchResults).length }}</span>
+            <span class="ring-value">{{ Object.keys(predictionStore.batchResults).length }}</span>
             <span class="ring-label">已分析</span>
           </div>
         </div>
@@ -48,7 +48,7 @@
 
     <!-- 扫描统计 -->
     <transition name="slide-fade">
-      <section v-if="Object.keys(marketStore.batchResults).length > 0" class="stats-section">
+      <section v-if="Object.keys(predictionStore.batchResults).length > 0" class="stats-section">
         <div class="stat-card bullish">
           <div class="stat-icon">📈</div>
           <div class="stat-info">
@@ -113,20 +113,20 @@
             </div>
 
             <!-- AI 预测结果 -->
-            <div v-if="marketStore.batchResults[symbol.symbol]" class="ai-result">
-              <div class="result-direction" :class="getPredictionClass(marketStore.batchResults[symbol.symbol].prediction)">
-                <span class="direction-icon">{{ getPredictionIcon(marketStore.batchResults[symbol.symbol].prediction) }}</span>
-                <span class="direction-text">{{ marketStore.batchResults[symbol.symbol].prediction }}</span>
+            <div v-if="predictionStore.batchResults[symbol.symbol]" class="ai-result">
+              <div class="result-direction" :class="getPredictionClass(predictionStore.batchResults[symbol.symbol].prediction)">
+                <span class="direction-icon">{{ getPredictionIcon(predictionStore.batchResults[symbol.symbol].prediction) }}</span>
+                <span class="direction-text">{{ predictionStore.batchResults[symbol.symbol].prediction }}</span>
               </div>
               <div class="result-confidence">
                 <div class="confidence-bar">
                   <div 
                     class="confidence-fill" 
-                    :style="{ width: marketStore.batchResults[symbol.symbol].confidence + '%' }"
-                    :class="getPredictionClass(marketStore.batchResults[symbol.symbol].prediction)"
+                    :style="{ width: predictionStore.batchResults[symbol.symbol].confidence + '%' }"
+                    :class="getPredictionClass(predictionStore.batchResults[symbol.symbol].prediction)"
                   ></div>
                 </div>
-                <span class="confidence-value">{{ marketStore.batchResults[symbol.symbol].confidence }}%</span>
+                <span class="confidence-value">{{ predictionStore.batchResults[symbol.symbol].confidence }}%</span>
               </div>
             </div>
             <div v-else class="ai-pending">
@@ -224,10 +224,11 @@ import {
   Right,
   Loading
 } from '@element-plus/icons-vue'
-import { useMarketStore } from '@/stores'
+import { useMarketStore, usePredictionStore } from '@/stores'
 
 const router = useRouter()
 const marketStore = useMarketStore()
+const predictionStore = usePredictionStore()
 const loading = ref(false)
 
 const guideSteps = [
@@ -239,19 +240,19 @@ const guideSteps = [
 
 // 统计
 const bullishCount = computed(() => {
-  return Object.values(marketStore.batchResults).filter((r: any) => 
+  return Object.values(predictionStore.batchResults).filter((r: any) => 
     r.prediction === '看涨' || r.prediction === 'bullish'
   ).length
 })
 
 const bearishCount = computed(() => {
-  return Object.values(marketStore.batchResults).filter((r: any) => 
+  return Object.values(predictionStore.batchResults).filter((r: any) => 
     r.prediction === '看跌' || r.prediction === 'bearish'
   ).length
 })
 
 const neutralCount = computed(() => {
-  return Object.values(marketStore.batchResults).filter((r: any) => 
+  return Object.values(predictionStore.batchResults).filter((r: any) => 
     r.prediction === '震荡' || r.prediction === 'neutral'
   ).length
 })
@@ -274,7 +275,7 @@ function getChangePercent(symbol: string): number {
 }
 
 function getCardClass(symbol: string) {
-  const result = marketStore.batchResults[symbol]
+  const result = predictionStore.batchResults[symbol]
   if (!result) return ''
   if (result.prediction === '看涨' || result.prediction === 'bullish') return 'bullish'
   if (result.prediction === '看跌' || result.prediction === 'bearish') return 'bearish'
@@ -309,7 +310,7 @@ async function refreshMarket() {
 const handleBatchScan = async () => {
   try {
     ElMessage.info('正在启动全场 AI 扫描...')
-    await marketStore.runBatchScanner()
+    await predictionStore.runBatchScanner()
     ElMessage.success('全场扫描完成')
   } catch (e) {
     ElMessage.error('扫描失败')

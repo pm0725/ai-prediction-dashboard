@@ -139,13 +139,16 @@
        <!-- Footer Actions -->
         <div class="mt-auto flex justify-between items-center z-10 pt-4 border-t border-slate-800/50">
            <div class="flex items-center gap-2 text-xs font-medium text-slate-500 font-sans">
-              <el-icon><Cpu /></el-icon> AI 模型 v3.2 · 响应 {{ currentItem.processTime }}ms
+              <el-icon><Cpu /></el-icon> AI 模型 v3.2 · 响应 <span class="font-tabular">{{ currentItem.processTime }}</span>ms
            </div>
            <button 
-              class="text-xs font-bold text-blue-400 hover:text-white transition-colors flex items-center gap-1 group font-sans"
-              @click="handleDeepAnalysis(currentItem.symbol)"
+              class="text-xs font-bold text-blue-400 hover:text-white transition-colors flex items-center gap-1 group font-sans disabled:opacity-50 disabled:cursor-not-allowed"
+              @click="handleDeepAnalysis(currentItem?.symbol)"
+              :disabled="predictionStore.loading.prediction || !currentItem?.symbol || currentItem?.symbol === '扫描中...'"
            >
-              查看深度分析 <el-icon class="group-hover:translate-x-1 transition-transform"><ArrowRight /></el-icon>
+              {{ predictionStore.loading.prediction ? '深度分析中...' : '查看深度分析' }}
+              <el-icon v-if="!predictionStore.loading.prediction" class="group-hover:translate-x-1 transition-transform"><ArrowRight /></el-icon>
+              <el-icon v-else class="animate-spin"><Refresh /></el-icon>
            </button>
         </div>
     </div>
@@ -157,7 +160,7 @@
               <el-icon class="animate-pulse"><Warning /></el-icon>
               暴涨暴跌预警
            </span>
-           <span class="text-[10px] bg-orange-900/30 px-2 py-0.5 rounded text-orange-400 font-mono">{{ listItems.length }}</span>
+           <span class="text-[10px] bg-orange-900/30 px-2 py-0.5 rounded text-orange-400 font-tabular font-bold">{{ listItems.length }}</span>
         </div>
         
         <div class="flex-1 overflow-y-auto custom-scroll">
@@ -231,12 +234,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, defineEmits } from 'vue'
-import { Top, Bottom, ArrowRight, Cpu, Warning, Bell, DataAnalysis } from '@element-plus/icons-vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { Top, Bottom, ArrowRight, Cpu, Warning, Bell, DataAnalysis, Refresh } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
+import { formatPrice } from '@/utils/formatters'
 import { usePredictionStore } from '@/stores/usePredictionStore'
 
-const marketStore = usePredictionStore()
+const predictionStore = usePredictionStore()
 const emit = defineEmits(['analyze'])
 
 // ================= Audio =================
@@ -282,23 +286,23 @@ const lastAlertTimestamp = ref(0) // Track last alert to trigger sound
 
 const predictions = computed(() => {
     // 1. Get Batch Results
-    const results = marketStore.batchResults
+    const results = predictionStore.batchResults
     let items = Object.values(results)
 
     // 2. Prepend Current Prediction if exists
-    if (marketStore.prediction) {
+    if (predictionStore.prediction) {
         // Avoid duplicate if it's already in batch
-        if (!results[marketStore.prediction.symbol]) {
-             items.unshift(marketStore.prediction)
+        if (!results[predictionStore.prediction.symbol]) {
+             items.unshift(predictionStore.prediction)
         } else {
             // Move to front if exists
-            items = items.filter(i => i.symbol !== marketStore.prediction!.symbol)
-            items.unshift(marketStore.prediction)
+            items = items.filter(i => i.symbol !== predictionStore.prediction!.symbol)
+            items.unshift(predictionStore.prediction)
         }
     }
     
     // 3. [NEW] Prepend Market Alerts (Real-time Pump/Dump)
-    const alerts = marketStore.marketAlerts || []
+    const alerts = predictionStore.marketAlerts || []
 
     // Check for new alerts to play sound (Side effect in computed is discouraged but effective here for real-time trigger without watchers on deep arrays)
     // actually watcher is better. Added watcher below.
@@ -333,12 +337,15 @@ const predictions = computed(() => {
         // Format Entry
         let entryText = '--'
         if (item.entry_zone) {
-            entryText = `${item.entry_zone.low} - ${item.entry_zone.high}`
+            entryText = `${formatPrice(item.entry_zone.low)} - ${formatPrice(item.entry_zone.high)}`
         }
 
         // Format Levels
-        const resistance = item.key_levels?.strong_resistance || (item.take_profit && item.take_profit[0]) || '--'
-        const support = item.key_levels?.strong_support || item.stop_loss || '--'
+        const rawRes = item.key_levels?.strong_resistance || (item.take_profit && item.take_profit[0])
+        const rawSup = item.key_levels?.strong_support || item.stop_loss
+        
+        const resistance = rawRes ? formatPrice(rawRes) : '--'
+        const support = rawSup ? formatPrice(rawSup) : '--'
 
         return {
             id: item.symbol,
@@ -379,7 +386,14 @@ const predictions = computed(() => {
     return finalItems
 })
 
-const currentItem = computed(() => predictions.value[activeIndex.value])
+// 防止 index 越界的核心逻辑
+watch(() => predictions.value.length, (newLen) => {
+    if (activeIndex.value >= newLen) {
+        activeIndex.value = Math.max(0, newLen - 1)
+    }
+})
+
+const currentItem = computed(() => predictions.value[activeIndex.value] || predictions.value[0])
 const listItems = computed(() => predictions.value)
 
 const translationMap: Record<string, string> = {
@@ -449,7 +463,7 @@ const confidenceDashArray = computed(() => {
 })
 
 // ================= Watcher for Audio =================
-watch(() => marketStore.marketAlerts, (newAlerts) => {
+watch(() => predictionStore.marketAlerts, (newAlerts) => {
     if (newAlerts && newAlerts.length > 0) {
         const latest = newAlerts[0]
         // Only play if it's a new timestamp we haven't seen
@@ -542,11 +556,16 @@ function updateCountdown() {
 // ================= Lifecycle =================
 
 onMounted(async () => {
-    // 移除了默认的自动扫描逻辑，现在仅在用户明确操作或后台推送时更新
     startCarousel()
     if (countdownTimer) clearInterval(countdownTimer)
     countdownTimer = setInterval(updateCountdown, 1000)
     updateCountdown()
+
+    // 自动初始化：如果当前没有推选结果，则自动触发全场扫描
+    if (Object.keys(predictionStore.batchResults).length === 0 && !predictionStore.loading.batch) {
+        console.log('Spotlight: No results found, triggering auto-scan...')
+        predictionStore.runBatchScanner()
+    }
 })
 
 onUnmounted(() => {

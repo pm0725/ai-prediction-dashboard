@@ -8,6 +8,7 @@ Version: 1.0.0
 """
 
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -58,12 +59,12 @@ async def push_market_data():
                 await manager.broadcast({
                     "type": "ticker_update",
                     "data": tickers,
-                    "timestamp": asyncio.get_event_loop().time()
+                    "timestamp": time.time()  # B-MED-6 修复: 使用 time.time() 替代弃用的 get_event_loop().time()
                 })
 
                 # 2. 检查波动率和交易量预警
                 alerts = []
-                now = asyncio.get_event_loop().time()
+                now = time.time()
                 
                 for t in tickers:
                     symbol = t['symbol']

@@ -108,159 +108,54 @@ class AnalysisResult(BaseModel):
 
     @validator('prediction')
     def validate_prediction(cls, v):
-        valid_values = ['看涨', '看跌', '震荡', 'bullish', 'bearish', 'neutral']
-        if v.lower() not in [x.lower() for x in valid_values]:
-            raise ValueError(f"预测方向必须是: {valid_values}")
-        return v
+        # 统一归一化为标准值，容忍带额外描述的变体
+        v_low = v.lower()
+        if any(x in v_low for x in ['看涨', 'bull']): return '看涨'
+        if any(x in v_low for x in ['看跌', 'bear']): return '看跌'
+        return '震荡'
 
 
 # ============================================================
 # 系统提示词定义
 # ============================================================
 
-SYSTEM_PROMPT = """# 角色定义
+SYSTEM_PROMPT = """# Role: 智链量化风控师 (Senior Quant Strategist)
+你是一个极其严谨的加密货币量化风控师。你的任务是根据提供的实时市场上下文数据，生成高胜率、风险可控的合约分析与策略方案。
 
-你是"智链预测"系统的核心分析引擎 —— 一位拥有15年经验的**顶尖加密货币量化风控师**。
+## 核心分析原则
+1. **数据驱动**: 拒绝主观偏见。所有结论必须源自提供的指标数据。
+2. **三重共振**: 最优信号源自趋势、形态与筹码压力的三方确认。
+3. **防御优先**: 止损是生命线。优先计算失败后的最大回撤。
+4. **思维链引导 (COT)**: 在生成结论前，必须内部预演背离逻辑。
 
-## 专业背景
-- 曾任职于顶级量化对冲基金，管理超过5亿美元的加密货币资产
-- 精通技术分析、链上数据解读、市场微观结构分析
-- 擅长识别高概率交易机会，同时严格控制下行风险
-- 对市场情绪和资金流向有敏锐的洞察力
+## 逻辑一致性硬性规则
+- **做多 (Long)**: 必须满足 `TP > Entry > SL`。止损位必须设在关键支撑下方。
+- **空头/做空 (Short)**: 必须满足 `TP < Entry < SL`。止损位必须设在关键阻力上方。
+- **盈亏比 (RRR)**: 第一止盈位预期 RRR >= 1.2。
+- **防追涨杀跌**: 做多入场价必须 ≤ 当前价格；做空入场价必须 ≥ 当前价格。
+- **止损逻辑**: 强制参考 1.5 * ATR。
 
-## 核心分析框架 (PRISM)
-
-### P - Price Action (价格行为)
-- K线形态识别（锤子线、吞没形态、星线等）
-- 趋势结构（更高的高点/低点，或相反）
-    - K线形态识别（锤子线、吞没形态、星线等）
-    - 趋势结构（更高的高点/低点，或相反）
-    - **关键支撑/阻力位识别**: 
-      - 必须优先参考 **VPVR POC (筹码峰)** 和 **Val Area (价值区域)**。POC 是最强的磁力位和支撑/阻力位。
-      - 结合 **Pivot Points (枢轴点)** 和 **Swing Highs/Lows (波段高低点)** 进行确认。
-      - 禁止仅凭感觉画线。
-
-### R - Risk Metrics (风险指标)
-- 波动率评估（ATR、布林带宽度）
-- 资金费率方向和极端值判断
-- 持仓量变化和清算风险
-
-### I - Indicators (技术指标)
-- 动量指标：RSI超买超卖、MACD交叉、KDJ
-- 趋势指标：MA均线系统、EMA排列
-- 成交量分析：量价配合、异常放量
-- **量价背离检查 (关键)**: 必须对比 K线走势 与 巨鲸净流量(Net Whale Vol)。
-    - 若价格下跌但巨鲸净买入(CVD上升) -> **看涨吸筹 (Bullish Accumulation)** -> 强烈买入信号。
-    - 若价格上涨但巨鲸净卖出(CVD下降) -> **看跌派发 (Bearish Distribution)** -> 强烈卖出信号。
-
-### S - Sentiment (市场情绪)
-- 新闻事件影响评估
-- 社交媒体情绪倾向
-- 恐慌贪婪指数参考
-
-### M - Macro (宏观背景)
-- 比特币主导地位变化
-- 重大宏观事件（FOMC、CPI等）
-- 链上大户行为
-
-## 输出规范
-
-你**必须**严格按照以下JSON格式输出分析结果，不要添加任何其他文字。
-**重要**: 请务必保持思维链（Reasoning）精简，直击要点，避免冗长废话，以确保JSON结果能完整生成而不被截断。
+## 输出格式 (Strict JSON Only)
+`reasoning` 字段应体现 Observation -> Conflict -> Conclusion -> Risk。
 
 ```json
 {
-  "symbol": "交易对符号",
-  "analysis_time": "ISO 8601时间戳",
-  "timeframe": "分析周期",
+  "symbol": "ETHUSDT",
+  "analysis_time": "ISO-8601",
+  "timeframe": "4h/1h",
   "prediction": "看涨|看跌|震荡",
-  "confidence": 0-100的整数,
-  "reasoning": [
-    "逻辑点1：具体的技术或基本面依据",
-    "逻辑点2：...",
-    "逻辑点3：...",
-    "逻辑点4：...",
-    "逻辑点5：..."
-  ],
-  "key_levels": {
-    "strong_resistance": 强阻力价格,
-    "weak_resistance": 弱阻力价格,
-    "current_price": 当前价格,
-    "weak_support": 弱支撑价格,
-    "strong_support": 强支撑价格
-  },
-  "suggested_action": "建议操作描述",
-  "entry_zone": {
-    "low": 入场区间下限,
-    "high": 入场区间上限
-  },
-  "stop_loss": 止损价格,
-  "take_profit": [目标价1, 目标价2, 目标价3],
+  "confidence": 0-100,
+  "reasoning": ["...", "...", "..."],
+  "key_levels": {"strong_resistance": 0, "current_price": 0, "strong_support": 0},
+  "suggested_action": "描述",
+  "entry_zone": {"low": 0, "high": 0},
+  "stop_loss": 0,
+  "take_profit": [0, 0, 0],
   "risk_level": "低|中|高|极高",
-  "risk_warning": [
-    "风险提示1",
-    "风险提示2"
-  ],
-  "summary": "100字以内的中文分析摘要"
+  "risk_warning": ["..."],
+  "summary": "摘要"
 }
 ```
-
-## 分析原则
-
-1. **概率思维**：永远用概率描述，绝不说"一定"或"肯定"
-2. **风险优先**：任何分析必须包含风险评估和止损建议
-3. **逻辑清晰**：每个结论必须有明确的数据或指标支撑
-4. **保守置信度**：
-   - 60-70%：有一定依据但不确定性较高
-   - 70-80%：多重信号共振，概率较高
-   - 80-90%：强烈信号，历史上胜率高的模式
-   - 90%以上：极少给出，需要极强的技术形态和基本面共振
-5. **风险警告**：主动识别可能导致判断失效的因素
-
-6. **交易计划构建规则 (绝对严格执行)**：
-   - **入场区间 (Entry Zone)**：必须有一定的宽度（至少 0.3% - 0.5%），禁止点位重合。
-     * 错误示例: [2316.79, 2316.80] (太窄)
-     * 正确示例: [2310.00, 2320.00] (有操作空间)
-   - **盈亏比 (Risk:Reward)**：必须 > 1.5。即 (目标价1 - 入场均价) / (入场均价 - 止损价) > 1.5。如果无法满足，请放弃交易建议，改为"观望"。
-   - **目标位逻辑**：目标位1必须在入场区间之外，且有足够的利润空间。禁止目标位在入场区间内。
-   - **震荡/冲突处理**：如果判断为"震荡"或"信号冲突"，请优先建议"观望"或"关键位挂单"（Breakout/Pullback），不要强行给出某种现价操作建议。
-   - **止损逻辑**：必须参考 ATR 或关键技术位（如前低/前高），不能随意设置。
-   - **做空方向特别提醒**：对于**做空(Short)**建议，**止损价必须高于入场价**，**目标价必须低于入场价**。请仔细检查，不要搞反。
-   - **多周期共振 (MTF Resonance)**：必须参考日线(Daily)趋势。若小周期信号与日线趋势逆势，必须在 risk_warning 中注明，并要求降低仓位或建议观望。若价格位于 POC 下方，偏空看待；位于 POC 上方，偏多看待。
-   - **智能入场 (Smart Entry Protocol)**：
-     *   **挂单墙保护 (Wall Protection)**：做多入场价应 **略高于** 主力买单墙 (Major Support)；做空入场价应 **略低于** 主力卖单墙 (Major Resistance)。
-     *   **回调优先 (Pullback Preference)**：当 RSI > 65 (超买) 或价格远离 EMA21 时，必须建议 **Limit Order (限价回调)** 入场，禁止市价追单。
-     *   **禁止追涨杀跌 (No Chasing)**: 
-         - **做多(Long)**: 入场区间上限(High) 必须 ≤ 当前价格。禁止在价格已经暴涨后建议市价买入。
-         - **做空(Short)**: 入场区间下限(Low) 必须 ≥ 当前价格。禁止在价格已经暴跌后建议市价卖出。
-     *   **动态区间 (Dynamic Width)**：入场区间宽度应参考 ATR (0.3 ~ 0.5 * ATR)，避免区间过窄无法成交。
-
-   - **🛡️ 逻辑一致性强制检查 (LOGIC ENFORCEMENT) - 必须通过**:
-     *   **做多 (Long)**: 止损价 < 入场区间下限。 (SL < Entry Low)。如果不满足，请立刻调整止损价。
-     *   **做空 (Short)**: 止损价 > 入场区间上限。 (SL > Entry High)。如果不满足，请立刻调整止损价。
-     *   **盈亏比 (RRR)**: (第一止盈位 - 入场均价) / (入场均价 - 止损价) 必须高于 1.2。若由于上方阻力太近导致盈亏比不足，请放弃交易建议。
-     *   **禁止**: 止损价绝对不能在入场区间内部。
-     *   **禁止**: 目标价(TP)绝对不能在入场区间内部。
-
-### 7. 🛡️ 深度风控与逻辑自洽 (Deep Value & Consistency):
-   - **事前验尸 (Pre-mortem)**: 在给出结论前，必须强迫自己列出 **"这笔交易失败的3个可能原因"**（例如：BTC回调、假突破、流动性不足）。如果不确定性过高，直接建议观望。
-   - **盈亏比硬性要求**: (目标价 - 入场) / (入场 - 止损) 必须 > 1.2。若无法满足（例如上方阻力太近），请放弃建议。
-   - **置信度评分标准 (Confluence Scoring)**:
-     *   **< 60%**: 单一信号 (仅RSI超卖)。 -> **建议观望**
-     *   **60-70%**: 双重信号 (支撑位 + K线形态)。
-     *   **70-80%**: 三重共振 (支撑位 + K线形态 + 量价背离)。 -> **标准入场**
-     *   **> 80%**: 四重共振 + 宏观/链上数据支持。 -> **高胜率机会**
-
-## 禁止事项
-
-201: ❌ 给出100%确定的预测
-202: ❌ 忽略止损设置
-203: ❌ 在数据不足时强行给出高置信度结论
-204: ❌ 输出JSON以外的任何格式
-205: ❌ 鼓励高杠杆(>20x)或重仓操作
-206: ❌ 给出极窄的入场区间（<0.3%）
-207: ❌ 给出盈亏比 < 1.0 的交易计划
-208: ❌ 在趋势不明时强行建议开仓
 """
 
 
@@ -379,89 +274,64 @@ class DeepSeekAnalyst:
             "1h": "1小时", "4h": "4小时", "1d": "日线", "1w": "周线"
         }.get(timeframe, timeframe)
         
-        # 构建Prompt模板
+        # 获取分析偏好
+        prefs = context_data.get("user_preferences", {})
+        depth_level = prefs.get("depth", 2) # 1: quick, 2: standard, 3: deep
+        
+        # 1. 动态精简 K 线数据 (Token 效率核心)
+        # 根据深度决定传给 AI 的历史 K 线长度
+        kline_limit = {1: 30, 2: 70, 3: 150}.get(depth_level, 70)
+        
+        # 提取 K 线摘要 (假设 context_data['klines'] 是原始列表)
+        raw_klines = context_data.get("klines", [])
+        if len(raw_klines) > kline_limit:
+            klines_to_send = raw_klines[-kline_limit:]
+            kline_summary = f"最近 {kline_limit} 根分时线: Open={klines_to_send[0]['open']}, Close={klines_to_send[-1]['close']}, "
+            kline_summary += f"High={max(k['high'] for k in klines_to_send)}, Low={min(k['low'] for k in klines_to_send)}"
+        else:
+            kline_summary = context_data.get("kline_summary", "保持当前预测")
+
+        # 2. 构建高密度技术脉络 (Tech Pulse)
+        technical_pulse = {
+            "p": context_data.get("current_price"),
+            "rsi": round(context_data.get("rsi", 50), 2),
+            "macd": context_data.get("macd", "0/0/0"),
+            "ema": context_data.get("ema_status", "未确认"),
+            "trend": context_data.get("ma_status", "neutral"),
+            "vol": context_data.get("volume_24h", "n/a"),
+            "atr": round(context_data.get("atr", 0), 2)
+        }
+
+        # 3. 组装 Prompt
         prompt_parts = [
-            f"## 分析请求",
-            f"**交易对**: {symbol}",
-            f"**分析时间**: {current_time}",
-            f"**分析周期**: {timeframe_cn}",
-            "",
-            "## 市场数据",
+            f"## [Context] {symbol} @ {datetime.now().isoformat()} (TF: {context_data.get('timeframe', '4h')})",
+            f"### [Price & K-lines]\n{kline_summary}",
+            f"### [Technical Pulse]\n{json.dumps(technical_pulse)}",
         ]
         
-        # 添加K线摘要
-        if "kline_summary" in context_data:
-            prompt_parts.append(f"### K线走势摘要\n{context_data['kline_summary']}")
-        
-        # 添加当前价格
-        if "current_price" in context_data:
-            prompt_parts.append(f"**当前价格**: {context_data['current_price']}")
-        
-        # 添加资金费率
-        if "funding_rate" in context_data:
-            rate = context_data['funding_rate']
-            rate_pct = f"{rate * 100:.4f}%"
-            sentiment = "多头情绪偏高" if rate > 0.01 else ("空头情绪偏高" if rate < -0.01 else "情绪中性")
-            prompt_parts.append(f"**资金费率**: {rate_pct} ({sentiment})")
-        
-        # 添加持仓量
-        if "open_interest" in context_data:
-            prompt_parts.append(f"**持仓量**: {context_data['open_interest']}")
-        
-        # 添加技术指标
-        prompt_parts.append("\n### 技术指标")
-        
-        if "rsi" in context_data:
-            rsi = context_data['rsi']
-            rsi_status = "超买" if rsi > 70 else ("超卖" if rsi < 30 else "中性区间")
-            prompt_parts.append(f"- **RSI(14)**: {rsi:.2f} ({rsi_status})")
-        
-        if "macd" in context_data:
-            prompt_parts.append(f"- **MACD**: {context_data['macd']}")
-        
-        if "ma_status" in context_data:
-            prompt_parts.append(f"- **均线系统**: {context_data['ma_status']}")
-        
-        if "bollinger" in context_data:
-            prompt_parts.append(f"- **布林带**: {context_data['bollinger']}")
-        
-        # 添加新闻
-        if "news_headlines" in context_data and context_data['news_headlines']:
-            prompt_parts.append("\n### 近期相关新闻")
-            for i, headline in enumerate(context_data['news_headlines'][:5], 1):
-                prompt_parts.append(f"{i}. {headline}")
-        
-        # 添加市场情绪
-        if "market_sentiment" in context_data:
-            prompt_parts.append(f"\n### 市场情绪\n{context_data['market_sentiment']}")
+        # 添加精简新闻 (所有 depth 级别)
+        news = context_data.get("news_headlines", [])
+        if news:
+            prompt_parts.append(f"### [Top Headlines]\n" + "\n".join([f"- {h}" for h in news[:3]]))
 
-        # ========== 新增: EMA双均线系统 ==========
-        if "ema_status" in context_data:
-            prompt_parts.append(f"\n### EMA双均线系统\n{context_data['ema_status']}")
-        
-        # ========== 新增: ATR波动率 ==========
-        if "atr" in context_data and context_data["atr"]:
-            atr = context_data["atr"]
-            current_price = context_data.get("current_price", 0)
-            atr_pct = (atr / current_price * 100) if current_price else 0
-            prompt_parts.append(f"\n### 波动率指标")
-            prompt_parts.append(f"- ATR(14): {atr:.2f} ({atr_pct:.2f}%)")
-            prompt_parts.append(f"- 建议止损距离: {atr * 1.5:.2f} (1.5×ATR)")
-        
+        # ========== 深度上下文 (按 depth 级别门控) ==========
+        _inject_deep = depth_level >= 2      # 标准 + 深度
+        _inject_advanced = depth_level >= 3   # 仅深度
+
         # ========== 新增: K线形态识别 ==========
-        if "candlestick_patterns" in context_data and context_data["candlestick_patterns"]:
+        if _inject_deep and "candlestick_patterns" in context_data and context_data["candlestick_patterns"]:
             prompt_parts.append("\n### K线形态识别")
             for pattern in context_data["candlestick_patterns"]:
                 prompt_parts.append(f"- ⚠️ {pattern}")
         
         # ========== 新增: 信号冲突警告 ==========
-        if "signal_conflicts" in context_data and context_data["signal_conflicts"]:
+        if _inject_deep and "signal_conflicts" in context_data and context_data["signal_conflicts"]:
             prompt_parts.append("\n### ⚠️ 信号冲突提醒")
             for conflict in context_data["signal_conflicts"]:
                 prompt_parts.append(f"- 🔴 {conflict}")
         
         # ========== 新增: 趋势线 (Trend Lines) ==========
-        if "trend_lines" in context_data and context_data["trend_lines"]:
+        if _inject_deep and "trend_lines" in context_data and context_data["trend_lines"]:
             tl = context_data["trend_lines"]
             prompt_parts.append("\n### 自动趋势线识别 (Trend Lines)")
             
@@ -484,7 +354,7 @@ class DeepSeekAnalyst:
                 prompt_parts.append("- ⚠️ 信号: 疑似假突破 (Fakeout)")
 
         # 添加恐惧贪婪指数 (新增)
-        if "fear_greed_index" in context_data and context_data["fear_greed_index"]:
+        if _inject_deep and "fear_greed_index" in context_data and context_data["fear_greed_index"]:
             fng = context_data["fear_greed_index"]
             prompt_parts.append(f"\n### 市场情绪 (Fear & Greed)")
             prompt_parts.append(f"- 指数: {fng.get('value')} ({fng.get('classification')})")
@@ -494,7 +364,7 @@ class DeepSeekAnalyst:
                 prompt_parts.append("- 💡注意: 市场极度贪婪，警惕回调风险")
 
         # 添加市场深度 (增强版)
-        if "order_book" in context_data and context_data["order_book"]:
+        if _inject_deep and "order_book" in context_data and context_data["order_book"]:
             ob = context_data["order_book"]
             prompt_parts.append("\n### 市场深度 (Order Book)")
             prompt_parts.append(f"- 多空挂单比: {ob.get('bid_ask_ratio', 0):.2f}")
@@ -521,7 +391,7 @@ class DeepSeekAnalyst:
                 prompt_parts.append(f"  * 状态: 当前价{'高于' if context_data.get('current_price', 0) > vpvr['poc'] else '低于'} POC")
         
         # 添加清算风险估算 (新增)
-        if "liquidation_levels" in context_data:
+        if _inject_advanced and "liquidation_levels" in context_data:
             liq = context_data["liquidation_levels"]
             prompt_parts.append("\n### 理论清算风险 (Liquidation Map)")
             prompt_parts.append("提示：若价格触及以下区间，可能引发强制平仓导致行情加速。")
@@ -540,7 +410,7 @@ class DeepSeekAnalyst:
             prompt_parts.append(f"  * 20x杠杆: {liq['short_liq']['20x']:.2f}")
 
         # 添加趋势周期 (新增)
-        if "trend_context" in context_data and context_data["trend_context"]:
+        if _inject_advanced and "trend_context" in context_data and context_data["trend_context"]:
             tc = context_data["trend_context"]
             prompt_parts.append(f"\n### 趋势周期背景 ({tc.get('summary', '').split(' ')[0]})") # 取摘要的时间部分
             prompt_parts.append(f"- 趋势状态: {tc.get('trend_status', 'unknown')}")
@@ -555,7 +425,7 @@ class DeepSeekAnalyst:
             prompt_parts.append(f"- 走势简述: {tc.get('summary', '')}")
             
         # ========== 新增: 硬核支撑/阻力数据 (Pivot & Swing) ==========
-        if "pivot_points" in context_data and context_data["pivot_points"]:
+        if _inject_advanced and "pivot_points" in context_data and context_data["pivot_points"]:
             pp = context_data["pivot_points"]
             prompt_parts.append("\n### 关键支撑/阻力位数据 (Key S/R Levels)")
             
@@ -567,7 +437,7 @@ class DeepSeekAnalyst:
             fi = pp.get("fibonacci", {})
             prompt_parts.append(f"- **Fibonacci Pivot**: P={fi.get('p')} | R1={fi.get('r1')}, S1={fi.get('s1')} (0.382) | R2={fi.get('r2')}, S2={fi.get('s2')} (0.618)")
             
-        if "swing_levels" in context_data and context_data["swing_levels"]:
+        if _inject_advanced and "swing_levels" in context_data and context_data["swing_levels"]:
             sl = context_data["swing_levels"]
             prompt_parts.append(f"- **近期波段高低点 (Swing High/Low)**: High={sl.get('recent_high')}, Low={sl.get('recent_low')}")
 
@@ -630,10 +500,8 @@ class DeepSeekAnalyst:
             "4. risk_warning必须列出可能导致判断失效的风险因素"
         ])
 
-        # ========== 注入用户偏好 ==========
-        prefs = context_data.get("user_preferences", {})
+        # ========== 注入用户偏好 (复用 L278 的 prefs) ==========
         risk_pref = prefs.get("risk", "moderate")
-        depth = prefs.get("depth", 2)
 
         # ========== 智能入场与回调逻辑 ==========
         rsi_val = context_data.get('rsi', 50)
@@ -658,9 +526,9 @@ class DeepSeekAnalyst:
             prompt_parts.append("- **风格**: 均衡。在风险和收益之间寻找平衡。")
 
         # 分析深度
-        if depth == 1:
+        if depth_level == 1:
             prompt_parts.append("- **深度**: 简明扼要。重点关注关键点位和核心逻辑，忽略次要细节。")
-        elif depth == 3:
+        elif depth_level == 3:
             prompt_parts.append("- **深度**: 深度剖析。请结合宏观背景、相关性分析等多维度视角，提供详尽的逻辑推导。")
         
         return "\n".join(prompt_parts)
@@ -675,30 +543,70 @@ class DeepSeekAnalyst:
         3. 入场区间: Low < High
         """
         try:
-            pred_type = result.get("prediction", "").lower()
+            # 1. 提取基础数据
+            p = result.get("prediction", "").lower()
             current_price = context.get("current_price", 0)
             
-            p = pred_type
-            is_long = any(x in p for x in ["涨", "多", "bull", "buy", "long"]) and not any(x in p for x in ["不看涨", "not bull"])
-            is_short = any(x in p for x in ["跌", "空", "bear", "sell", "short"]) and not any(x in p for x in ["不看跌", "not bear"])
-            
-            # 2. 获取并修正关键价位 (适用于所有预测类型)
+            # 2. 获取并修正入场区间 (逻辑基础)
             entry_zone = result.get("entry_zone", {})
             if not entry_zone:
-                 # 保持 current_price 为基准
                  entry_zone = {"low": current_price, "high": current_price}
             
-            # 注入或修正 current_price 到 key_levels
-            if "key_levels" not in result:
-                result["key_levels"] = {}
-            result["key_levels"]["current_price"] = current_price
-                 
             entry_low = float(entry_zone.get("low", current_price))
             entry_high = float(entry_zone.get("high", current_price))
+            if entry_low > entry_high: entry_low, entry_high = entry_high, entry_low
+            avg_entry = (entry_low + entry_high) / 2
             
-            # 修正入场区间顺序
-            if entry_low > entry_high:
-                entry_low, entry_high = entry_high, entry_low
+            # --- 方向一致性硬校验 (最高优先级) ---
+            # 如果 AI 说的方向与给出的 TP/SL 逻辑冲突，以价位为准
+            tps = [float(x) for x in result.get("take_profit", [])]
+            sl = float(result.get("stop_loss", 0))
+            
+            is_long = False
+            is_short = False
+            
+            # 如果有完整的止盈目标，通过止盈位判定真实方向
+            is_price_long = False
+            is_price_short = False
+            if tps and tps[0] != avg_entry:
+                if tps[0] > avg_entry:
+                    is_price_long = True
+                else:
+                    is_price_short = True
+            
+            # 文本识别
+            is_text_long = any(x in p for x in ["涨", "多", "bull", "buy", "long"]) and not any(x in p for x in ["不看涨", "not bull"])
+            is_text_short = any(x in p for x in ["跌", "空", "bear", "sell", "short"]) and not any(x in p for x in ["不看跌", "not bear"])
+
+            # --- 冲突判定 ---
+            is_long = is_price_long
+            is_short = is_price_short
+            
+            # 如果价位无法判断，则采用文本
+            if not is_long and not is_short:
+                is_long = is_text_long
+                is_short = is_text_short
+            # 如果价位与文本方向相反，且价位有效，则视为冲突降级
+            elif (is_price_long and is_text_short) or (is_price_short and is_text_long):
+                logger.warning(f"检测到方向冲突: 文本({p}) 与 价位(TP:{tps[0]}) 矛盾，降级为震荡")
+                is_long = is_short = False
+                # BUG-5 修复: 降级时同步更新 reasoning 和 risk_warning
+                if "reasoning" not in result or not isinstance(result.get("reasoning"), list):
+                    result["reasoning"] = []
+                result["reasoning"].insert(0, f"⚠️ 系统检测到方向冲突: AI文本判断与价位逻辑矛盾(文本:{p}, TP:{tps[0]})，已自动降级为震荡/观望。")
+                if "risk_warning" not in result or not isinstance(result.get("risk_warning"), list):
+                    result["risk_warning"] = []
+                result["risk_warning"].insert(0, "方向冲突已触发自动降级，建议观望等待信号明确")
+
+            # 更新结果标签，确保前后端一致
+            if is_long: 
+                result["prediction"] = "看涨"
+                logger.debug(f"最终方向判定: 看涨 [基于{'价位' if is_price_long else '文本'}]")
+            elif is_short: 
+                result["prediction"] = "看跌"
+                logger.debug(f"最终方向判定: 看跌 [基于{'价位' if is_price_short else '文本'}]")
+            else: 
+                result["prediction"] = "震荡"
             
             # --- Anti-Chasing Logic (Smart Entry) ---
             # 防止追涨杀跌: 强制要求入场位不劣于现价太多
@@ -722,11 +630,13 @@ class DeepSeekAnalyst:
                     if entry_high < entry_low:
                         entry_high = entry_low * 1.005 # 给 0.5% 区间
 
-            # 更新回 result
+            # 更新回 result 价位，并确认为标准格式
             result["entry_zone"] = {"low": entry_low, "high": entry_high}
+            result["stop_loss"] = sl
+            result["take_profit"] = tps
             
             if not is_long and not is_short:
-                 return result # 震荡/观望仅做基础校验后返回
+                  return result # 震荡/观望仅做基础校验后返回
 
             avg_entry = (entry_low + entry_high) / 2
             sl = float(result.get("stop_loss", 0))
@@ -738,9 +648,14 @@ class DeepSeekAnalyst:
             # 3. 逻辑修正
             if is_long:
                 # 做多逻辑: SL < Entry
+                # 尝试结合 ATR 设定更科学的 SL (如果没有给出，默认 1.5x ATR)
+                atr = context.get("atr", 0)
                 if sl >= entry_low:
                     logger.warning(f"逻辑修正(Long): SL({sl}) >= Entry({entry_low}), 自动下调SL")
-                    sl = entry_low * 0.98 # 自动设为入场下方2%
+                    if atr > 0:
+                        sl = entry_low - (atr * 1.5)
+                    else:
+                        sl = entry_low * 0.98 # 自动设为入场下方2%
                     result["stop_loss"] = sl
                     
                 # 做多逻辑: TP > Entry
@@ -753,9 +668,13 @@ class DeepSeekAnalyst:
                     
             elif is_short:
                 # 做空逻辑: SL > Entry
+                atr = context.get("atr", 0)
                 if sl <= entry_high:
                     logger.warning(f"逻辑修正(Short): SL({sl}) <= Entry({entry_high}), 自动上调SL")
-                    sl = entry_high * 1.02 # 自动设为入场上方2%
+                    if atr > 0:
+                        sl = entry_high + (atr * 1.5)
+                    else:
+                        sl = entry_high * 1.02 # 自动设为入场上方2%
                     result["stop_loss"] = sl
                     
                 # 做空逻辑: TP < Entry
@@ -778,7 +697,7 @@ class DeepSeekAnalyst:
                     rrr = reward / risk
                     if rrr < 1.0:
                         logger.warning(f"RRR过低({rrr:.2f} < 1.0), 强制降级为观望")
-                        result["prediction"] = "Neutral (RRR Low)"
+                        result["prediction"] = "震荡" # 修正为合法的枚举值
                         result["reasoning"].insert(0, f"⚠️ 风险提示: 盈亏比过低 ({rrr:.2f})，建议观望。")
                         return result # 提前返回
             except Exception as e:
@@ -793,11 +712,161 @@ class DeepSeekAnalyst:
                 elif is_short and current_price <= tp1:
                     result["reasoning"].insert(0, f"⚠️ 提示: 现价 ({current_price}) 已触及或突破目标 TP1 ({tp1})，建议等待反弹入场。")
 
+            # ========== BUG-2/BUG-4: key_levels 校验与锚定 ==========
+            result = self._validate_key_levels(result, context)
+
+            # ========== BUG-1: reasoning 文本逻辑校验 ==========
+            result = self._sanitize_reasoning(result, context)
+
             return result
             
         except Exception as e:
             logger.error(f"逻辑校验发生错误: {e}, 返回原始结果")
             return result
+
+    def _validate_key_levels(self, result: dict, context: dict) -> dict:
+        """
+        校验 key_levels 合理性 (BUG-2 + BUG-4)
+        
+        1. 强制覆盖 current_price 为真实值
+        2. 确保 support < current_price < resistance
+        3. 如有 pivot_points，用 Pivot 锚定
+        """
+        try:
+            current_price = context.get("current_price", 0)
+            if not current_price:
+                return result
+
+            kl = result.get("key_levels", {})
+            if not isinstance(kl, dict):
+                kl = {}
+
+            # BUG-4: 强制覆盖 current_price
+            kl["current_price"] = current_price
+
+            # BUG-2: 确保 support < current_price < resistance
+            strong_support = float(kl.get("strong_support", 0))
+            strong_resistance = float(kl.get("strong_resistance", 0))
+            weak_support = float(kl.get("weak_support", 0))
+            weak_resistance = float(kl.get("weak_resistance", 0))
+
+            # 修正: 支撑位不能高于当前价
+            if strong_support > 0 and strong_support >= current_price:
+                logger.warning(f"key_levels修正: strong_support({strong_support}) >= 当前价({current_price}), 自动下调")
+                kl["strong_support"] = current_price * 0.95
+            if weak_support > 0 and weak_support >= current_price:
+                logger.warning(f"key_levels修正: weak_support({weak_support}) >= 当前价({current_price}), 自动下调")
+                kl["weak_support"] = current_price * 0.98
+
+            # 修正: 阻力位不能低于当前价
+            if strong_resistance > 0 and strong_resistance <= current_price:
+                logger.warning(f"key_levels修正: strong_resistance({strong_resistance}) <= 当前价({current_price}), 自动上调")
+                kl["strong_resistance"] = current_price * 1.05
+            if weak_resistance > 0 and weak_resistance <= current_price:
+                logger.warning(f"key_levels修正: weak_resistance({weak_resistance}) <= 当前价({current_price}), 自动上调")
+                kl["weak_resistance"] = current_price * 1.02
+
+            # 如有 pivot_points，做交叉验证
+            pivot = context.get("pivot_points", {})
+            if pivot:
+                classic = pivot.get("classic", {})
+                pivot_s1 = classic.get("s1")
+                pivot_r1 = classic.get("r1")
+                if pivot_s1 and strong_support > 0:
+                    # 如果 AI 给的支撑与 Pivot S1 偏差超过 5%，发出警告
+                    deviation = abs(strong_support - pivot_s1) / current_price
+                    if deviation > 0.05:
+                        logger.warning(f"key_levels偏差: AI support({strong_support}) vs Pivot S1({pivot_s1}), 偏差{deviation:.1%}")
+
+            result["key_levels"] = kl
+
+        except Exception as e:
+            logger.error(f"key_levels校验错误: {e}")
+
+        return result
+
+    def _sanitize_reasoning(self, result: dict, context: dict) -> dict:
+        """
+        校验 reasoning 和 risk_warning 中的价格逻辑 (BUG-1)
+        
+        扫描文本中的价格引用，检测与 current_price 矛盾的表述：
+        - "跌破支撑X" 但 X > current_price → 修正为 "已跌破支撑X"
+        - "突破阻力X" 但 X < current_price → 修正为 "已突破阻力X"
+        """
+        try:
+            current_price = context.get("current_price", 0)
+            if not current_price:
+                return result
+
+            import re
+
+            def fix_price_logic(text: str) -> str:
+                """修正单条文本中的价格逻辑矛盾"""
+                # 模式1: "向下跌破支撑X" / "跌破支撑X" 但 X > current_price
+                pattern_break_support = re.compile(
+                    r'(向下)?跌破(支撑|支撑位)?\s*([\d,]+\.?\d*)'
+                )
+                for m in pattern_break_support.finditer(text):
+                    price_str = m.group(3).replace(',', '')
+                    try:
+                        price_val = float(price_str)
+                        if price_val > current_price:
+                            old = m.group(0)
+                            new = f"已跌破前支撑{price_str}(当前价{current_price:.2f}已在其下方)"
+                            text = text.replace(old, new)
+                            logger.warning(f"reasoning修正: '{old}' → '{new}'")
+                    except ValueError:
+                        pass
+
+                # 模式2: "突破阻力X" / "向上突破X" 但 X < current_price  
+                pattern_break_resistance = re.compile(
+                    r'(向上)?突破(阻力|阻力位)?\s*([\d,]+\.?\d*)'
+                )
+                for m in pattern_break_resistance.finditer(text):
+                    price_str = m.group(3).replace(',', '')
+                    try:
+                        price_val = float(price_str)
+                        if price_val < current_price:
+                            old = m.group(0)
+                            new = f"已突破前阻力{price_str}(当前价{current_price:.2f}已在其上方)"
+                            text = text.replace(old, new)
+                            logger.warning(f"reasoning修正: '{old}' → '{new}'")
+                    except ValueError:
+                        pass
+
+                # 模式3: "支撑X" 但 X > current_price (支撑位应低于当前价)
+                # 排除已被模式1修正过的文本 (含"前支撑"/"已跌破")
+                pattern_support_above = re.compile(
+                    r'(?<!前)支撑(位)?[：:]?\s*([\d,]+\.?\d*)'
+                )
+                for m in pattern_support_above.finditer(text):
+                    price_str = m.group(2).replace(',', '')
+                    try:
+                        price_val = float(price_str)
+                        if price_val > current_price * 1.01:  # 容忍1%误差
+                            old = m.group(0)
+                            new = f"前支撑位{price_str}(已失守，当前价在其下方)"
+                            text = text.replace(old, new)
+                            logger.warning(f"reasoning修正: 支撑位({price_val})高于当前价({current_price})")
+                    except ValueError:
+                        pass
+
+                return text
+
+            # 处理 reasoning 列表
+            reasoning = result.get("reasoning", [])
+            if isinstance(reasoning, list):
+                result["reasoning"] = [fix_price_logic(r) for r in reasoning]
+
+            # 处理 risk_warning 列表
+            risk_warning = result.get("risk_warning", [])
+            if isinstance(risk_warning, list):
+                result["risk_warning"] = [fix_price_logic(r) for r in risk_warning]
+
+        except Exception as e:
+            logger.error(f"reasoning校验错误: {e}")
+
+        return result
 
     def _parse_response(self, response_text: str, context_data: Optional[dict] = None) -> AnalysisResult:
         """
@@ -831,6 +900,12 @@ class DeepSeekAnalyst:
             
             # 解析JSON
             data = json.loads(text)
+            
+            # 补齐可能缺失的字段 (Pydantic 校验要求)
+            if "analysis_time" not in data:
+                data["analysis_time"] = datetime.now().isoformat()
+            if "timeframe" not in data and context_data:
+                data["timeframe"] = context_data.get("timeframe", "4h")
             
             # ========== 新增: 防御性逻辑校验与修正 ==========
             if context_data:

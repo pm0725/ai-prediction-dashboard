@@ -238,7 +238,7 @@ async def predict_get(
 ):
     """GET方式的预测分析（便于测试）"""
     request = PredictRequest(symbol=symbol, timeframe=timeframe)
-    return await predict(request, fetcher, analyzer)
+    return await predict(request, True, fetcher, analyzer)  # MED-2 修复: 补充 use_cache 参数
 
 
 @router.post("/predict/stream")

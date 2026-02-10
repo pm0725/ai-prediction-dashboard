@@ -140,24 +140,37 @@ class BatchAnalyzer:
             
             # 2. 调用AI分析 (使用统一的 DeepSeekAnalyst)
             try:
-                analyst = get_analyst()
-                
-                # 注入用户偏好 (关键补丁: 对齐 predict 端的逻辑)
-                context_dict = context.to_dict()
-                context_dict["user_preferences"] = {
-                    "depth": 2, # Batch 默认 standard
-                    "risk": "moderate",
-                    "model": model,
-                    "prompt_template": prompt_template
-                }
+                # 引入指数避让重试逻辑
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        analyst = get_analyst()
+                        
+                        # 注入用户偏好 (关键补丁: 对齐 predict 端的逻辑)
+                        context_dict = context.to_dict()
+                        context_dict["user_preferences"] = {
+                            "depth": 2, # Batch 默认 standard
+                            "risk": "moderate",
+                            "model": model,
+                            "prompt_template": prompt_template
+                        }
 
-                result = await asyncio.wait_for(
-                    analyst.analyze_market(symbol, context_dict),
-                    timeout=self.timeout_seconds
-                )
+                        result = await asyncio.wait_for(
+                            analyst.analyze_market(symbol, context_dict),
+                            timeout=self.timeout_seconds
+                        )
+                        break # 成功则退出重试循环
+                    except (Exception) as e:
+                        if "429" in str(e) or "rate limit" in str(e).lower():
+                            wait_time = (attempt + 1) * 2
+                            logger.warning(f"触发速率限制 {symbol}, 等待 {wait_time}s 后重试 ({attempt+1}/{max_retries})")
+                            await asyncio.sleep(wait_time)
+                            if attempt == max_retries - 1: raise
+                        else:
+                            raise # 其他非限流错误直接抛出
                 
                 # 3. 注入透传数据
-                result_dict = result.dict() if hasattr(result, 'dict') else result.dict() # AnalysisResult is a Pydantic model
+                result_dict = result.model_dump() if hasattr(result, 'model_dump') else result.dict() # CRIT-4 修复: Pydantic v1/v2 兼容
                 context_dict = context.to_dict()
                 if "trend_context" in context_dict:
                     result_dict["trend_context"] = context_dict["trend_context"]
@@ -234,7 +247,7 @@ class BatchAnalyzer:
                         "prediction": direction,
                         "prediction_cn": "看涨" if direction == "Bullish" else ("看跌" if direction == "Bearish" else "震荡"),
                         "confidence": 60, # 降级结果置信度较低
-                        "reasoning": f"AI响应超时，基于技术指标分析: 趋势{trend}, RSI {rsi:.1f}",
+                        "reasoning": [f"AI响应超时，基于技术指标分析: 趋势{trend}, RSI {rsi:.1f}"],  # MED-3 修复: 必须是列表
                         "key_levels": {
                             "supports": [context.current_price * 0.95],
                             "resistances": [context.current_price * 1.05],

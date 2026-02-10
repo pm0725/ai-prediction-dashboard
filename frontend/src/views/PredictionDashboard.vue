@@ -171,7 +171,9 @@
                               <h3 class="panel-title flex items-center gap-2 font-display text-sm font-bold text-slate-300"><el-icon><MagicStick /></el-icon>今日推选</h3>
                               <div class="flex items-center gap-2">
                                   <span class="text-[10px] text-slate-500 bg-slate-800 px-2 py-0.5 rounded border border-slate-700 font-sans">AI 实时监控</span>
-                                  <button class="text-xs text-blue-400 hover:text-blue-300 font-display font-medium" @click="handleAnalyze">刷新</button>
+                                  <button class="text-xs text-blue-400 hover:text-blue-300 font-display font-medium disabled:opacity-50" @click="predictionStore.runBatchScanner" :disabled="predictionStore.loading.batch">
+                                      {{ predictionStore.loading.batch ? '扫描中...' : '刷新' }}
+                                  </button>
                               </div>
                            </div>
                            <SpotlightPredictions class="h-auto" @analyze="handleSpotlightAnalyze" />
@@ -288,11 +290,17 @@ const handleAnalyze = async () => {
     }
 }
 
-const handleSpotlightAnalyze = (symbol: string) => {
-    console.log(`[Dashboard] Spotlight requested analysis for: ${symbol}`)
-    selectedSymbol.value = symbol.includes('USDT') ? symbol : `${symbol}USDT`
-    // Wait for next tick so selectedSymbol update propagates (though handleAnalyze reads it directly)
-    handleAnalyze()
+const handleSpotlightAnalyze = async (symbol: string) => {
+    const targetSymbol = symbol.includes('USDT') ? symbol : `${symbol}USDT`
+    console.log(`[Dashboard] Spotlight requested analysis for: ${targetSymbol}`)
+    
+    // 如果是切换币种，先设置好状态
+    if (selectedSymbol.value !== targetSymbol) {
+        selectedSymbol.value = targetSymbol
+    }
+    
+    // 立即执行分析
+    await handleAnalyze()
 }
 
 // Event Styling Helpers

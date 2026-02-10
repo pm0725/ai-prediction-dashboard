@@ -107,8 +107,8 @@ class VolatilityMonitor:
                               (last_alert_type == "dump" and direction == "pump")
                 
                 if not is_reversal and time_since_last < self.COOLDOWN_SECONDS:
-                    # Ignore repetitive alert
-                    return None
+                    # B-MED-1 修复: continue 而非 return，允许检测更大时间窗口
+                    continue
                     
                 msg = f"{symbol} {direction.upper()}! {change*100:+.2f}% in {tf_label}"
                 

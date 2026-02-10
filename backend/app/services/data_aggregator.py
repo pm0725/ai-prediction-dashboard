@@ -807,16 +807,20 @@ def calculate_indicators(df: pd.DataFrame) -> TechnicalIndicators:
         ema_12 = close.ewm(span=12).mean().iloc[-1]
         ema_26 = close.ewm(span=26).mean().iloc[-1]
         
-        # 简化RSI计算
+        # 优化RSI计算 (使用 Wilder's Smoothing / EMA)
         delta = close.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+        gain = (delta.where(delta > 0, 0))
+        loss = (-delta.where(delta < 0, 0))
+        
+        # Wilder's Smoothing (alpha = 1/N) 等同于 span = 2N - 1 的 EMA
+        avg_gain = gain.ewm(alpha=1/14, min_periods=14).mean()
+        avg_loss = loss.ewm(alpha=1/14, min_periods=14).mean()
         
         # 避免除以零错误
-        if loss.iloc[-1] == 0:
-            rsi = 100.0 if gain.iloc[-1] > 0 else 50.0
+        if avg_loss.iloc[-1] == 0:
+            rsi = 100.0 if avg_gain.iloc[-1] > 0 else 50.0
         else:
-            rs = gain / loss
+            rs = avg_gain / avg_loss
             rsi = (100 - (100 / (1 + rs))).iloc[-1]
         
         # 简化MACD
@@ -831,13 +835,14 @@ def calculate_indicators(df: pd.DataFrame) -> TechnicalIndicators:
         bb_lower = bb_middle - 2 * std
         bb_width = (bb_upper - bb_lower) / bb_middle
         
-        # 简化ATR
+        # 优化ATR计算 (使用 Wilder's Smoothing / EMA)
         tr = pd.concat([
             high - low,
             abs(high - close.shift()),
             abs(low - close.shift())
         ], axis=1).max(axis=1)
-        atr = tr.rolling(14).mean().iloc[-1]
+        # Wilder's Smoothing alpha = 1/14
+        atr = tr.ewm(alpha=1/14, min_periods=14).mean().iloc[-1]
     
     # 判断趋势状态
     current_price = close.iloc[-1]
@@ -923,67 +928,93 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 def _detect_trend_lines(df: pd.DataFrame) -> dict:
     """
-    识别趋势线 (基于Pivot Point)
+    识别趋势线 (基于真正的局部极值 Pivot Point)
     
     算法:
-    1. 识别最近50根K线中的高低点 (Pivot High/Low)
+    1. 识别最近K线中的局部高低点 (Pivot High/Low) — 逐K线对比前后N根
     2. 连接两个高点形成阻力线,连接两个低点形成支撑线
-    3. 计算当前价格与趋势线的距离
+    3. 计算当前价格与趋势线的距离 (绝对值百分比)
     
     Returns:
         dict: {
-            "resistance_line": {"slope": float, "intercept": float, "current_value": float},
-            "support_line": {"slope": float, "intercept": float, "current_value": float},
-            "breakout": "up" | "down" | "none"
+            "resistance_line": {"slope": float, "current_value": float, "distance_pct": float},
+            "support_line": {"slope": float, "current_value": float, "distance_pct": float},
+            "breakout": "bullish_breakout" | "bearish_breakout" | "none"
         }
     """
     if len(df) < 20:
         return {}
-        
-    # 简单的 Pivot 识别 (前后3根)
-    window = 3
-    df['pivot_high'] = df['high'].rolling(window=window*2+1, center=True).max()
-    df['pivot_low'] = df['low'].rolling(window=window*2+1, center=True).min()
     
-    highs = df[df['high'] == df['pivot_high']].copy()
-    lows = df[df['low'] == df['pivot_low']].copy()
+    # CRIT-2 修复: 使用副本，不污染原始 DataFrame
+    _df = df.copy()
+        
+    # CRIT-1 修复: 真正的局部极值识别 (逐K线对比前后 window 根)
+    window = 3
+    high_vals = _df['high'].values
+    low_vals = _df['low'].values
+    n = len(_df)
+    
+    pivot_high_indices = []
+    pivot_low_indices = []
+    
+    for i in range(window, n - window):
+        # Pivot High: 当前 high 严格大于前后 window 根的 high
+        is_pivot_high = True
+        for j in range(1, window + 1):
+            if high_vals[i] <= high_vals[i - j] or high_vals[i] <= high_vals[i + j]:
+                is_pivot_high = False
+                break
+        if is_pivot_high:
+            pivot_high_indices.append(i)
+        
+        # Pivot Low: 当前 low 严格小于前后 window 根的 low
+        is_pivot_low = True
+        for j in range(1, window + 1):
+            if low_vals[i] >= low_vals[i - j] or low_vals[i] >= low_vals[i + j]:
+                is_pivot_low = False
+                break
+        if is_pivot_low:
+            pivot_low_indices.append(i)
     
     result = {}
-    current_idx = len(df) - 1
-    current_price = df['close'].iloc[-1]
+    current_idx = n - 1
+    current_price = float(_df['close'].iloc[-1])
     
     # 拟合阻力线 (使用最近的两个高点)
-    if len(highs) >= 2:
-        p1_h = highs.iloc[-2]
-        p2_h = highs.iloc[-1]
-        x1_h, y1_h = list(highs.index)[-2], p1_h['high']
-        x2_h, y2_h = list(highs.index)[-1], p2_h['high']
+    if len(pivot_high_indices) >= 2:
+        x1_h = pivot_high_indices[-2]
+        x2_h = pivot_high_indices[-1]
+        y1_h = float(high_vals[x1_h])
+        y2_h = float(high_vals[x2_h])
         
         if x2_h != x1_h:
             res_slope = (y2_h - y1_h) / (x2_h - x1_h)
-            res_intercept = y2_h - res_slope * x2_h
-            res_val = res_slope * current_idx + res_intercept
+            res_val = y2_h + res_slope * (current_idx - x2_h)
+            # MED-6 修复: distance_pct 使用绝对值百分比，并标记方向
+            dist = (current_price - res_val) / res_val * 100
             result["resistance_line"] = {
                 "slope": float(res_slope),
                 "current_value": float(res_val),
-                "distance_pct": (current_price - res_val) / res_val * 100
+                "distance_pct": float(f"{abs(dist):.2f}"),
+                "above": current_price > res_val
             }
             
     # 拟合支撑线 (使用最近的两个低点)
-    if len(lows) >= 2:
-        p1_l = lows.iloc[-2]
-        p2_l = lows.iloc[-1]
-        x1_l, y1_l = list(lows.index)[-2], p1_l['low']
-        x2_l, y2_l = list(lows.index)[-1], p2_l['low']
+    if len(pivot_low_indices) >= 2:
+        x1_l = pivot_low_indices[-2]
+        x2_l = pivot_low_indices[-1]
+        y1_l = float(low_vals[x1_l])
+        y2_l = float(low_vals[x2_l])
         
         if x2_l != x1_l:
             sup_slope = (y2_l - y1_l) / (x2_l - x1_l)
-            sup_intercept = y2_l - sup_slope * x2_l
-            sup_val = sup_slope * current_idx + sup_intercept
+            sup_val = y2_l + sup_slope * (current_idx - x2_l)
+            dist = (current_price - sup_val) / sup_val * 100
             result["support_line"] = {
                 "slope": float(sup_slope),
                 "current_value": float(sup_val),
-                "distance_pct": (current_price - sup_val) / sup_val * 100
+                "distance_pct": float(f"{abs(dist):.2f}"),
+                "above": current_price > sup_val
             }
             
     # 判断突破
@@ -1599,8 +1630,7 @@ async def prepare_context_for_ai(
     order_book = results[5]
     if isinstance(order_book, Exception):
         logger.debug(f"订单簿获取失败: {order_book}")
-        order_book = {}
-        
+        order_book = None  # CRIT-3 修复: 用 None 而非 {}，避免残缺数据
 
         
     # 8. 逐笔成交 (可选)
@@ -1628,7 +1658,7 @@ async def prepare_context_for_ai(
     
     # 4. 计算VPVR (筹码分布) - 新增
     vpvr = await loop.run_in_executor(None, _calculate_vpvr, df_main)
-    if vpvr:
+    if vpvr and order_book is not None:
         # 将VPVR注入order_book上下文 (作为一种深度数据)
         order_book["vpvr"] = vpvr
     

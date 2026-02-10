@@ -84,7 +84,7 @@ class FundingRate:
     symbol: str
     funding_rate: float
     funding_time: int
-    mark_price: float
+    mark_price: float = 0.0  # B-CRIT-2 修复: 添加默认值，避免构造时 TypeError
 
 
 @dataclass

@@ -64,15 +64,10 @@ const formattedStrategy = computed(() => {
     const p = props.prediction
     if (!p) return null
     
-    // Determine direction from prediction string or signal
-    let direction = '中性'
-    if (p.prediction_cn?.includes('看涨') || p.prediction?.toLowerCase().includes('bullish')) {
-        direction = '做多'
-    } else if (p.prediction_cn?.includes('看跌') || p.prediction?.toLowerCase().includes('bearish')) {
-        direction = '做空'
-    }
-
-    // Parse entry zone robustly
+    // 1. Resolve basic price context
+    const backPrice = p.key_levels?.current_price || p.current_price || 0
+    
+    // 2. Parse entry zone robustly (Must be before direction detection)
     let entryLow = 0, entryHigh = 0
     const z = p.entry_zone
     if (typeof z === 'string') {
@@ -81,7 +76,6 @@ const formattedStrategy = computed(() => {
             entryLow = parts[0]
             entryHigh = parts[1]
         } else {
-            // Fallback for malformed string or single price
             const singlePrice = parseFloat(z.replace(/,/g, ''))
             if (!isNaN(singlePrice)) {
                 entryLow = singlePrice * 0.998
@@ -93,23 +87,33 @@ const formattedStrategy = computed(() => {
         entryHigh = Number(z.high) || Number(z.entry_high) || 0
     }
     
-    // Final fallback if still 0
-    if (entryLow === 0 && p.current_price) {
-        entryLow = p.current_price * 0.995
-        entryHigh = p.current_price * 1.005
+    if (entryLow === 0 && backPrice > 0) {
+        entryLow = backPrice * 0.995
+        entryHigh = backPrice * 1.005
     }
 
-    // --- Validation Logic Start ---
-    const warnings = [...(p.risk_warning || p.warnings || ['市场波动大，请谨慎操作'])]
+    // 3. --- Improved Direction Detection (Strategy-First) ---
+    let direction = '中性'
+    const tpRaw = Array.isArray(p.take_profit) ? p.take_profit[0] : p.take_profit
+    const entryMid = (entryLow + entryHigh) / 2
     
-    // 1. Infer Direction if Neutral
-    if (direction === '中性' || direction === 'Neutral') {
-        const current = p.current_price || (entryLow + entryHigh) / 2
-        const tpRaw = Array.isArray(p.take_profit) ? p.take_profit[0] : p.take_profit
-        
-        if (Number(tpRaw) > current) direction = '做多'
-        else if (Number(tpRaw) < current) direction = '做空'
+    // High Priority: Detection by trade levels
+    if (Number(tpRaw) > entryMid && entryMid > 0) {
+        direction = '做多'
+    } else if (Number(tpRaw) < entryMid && entryMid > 0 && Number(tpRaw) > 0) {
+        direction = '做空'
+    } else {
+        // Fallback: Detection by text signal
+        if (p.prediction_cn?.includes('看涨') || p.prediction?.toLowerCase().includes('bullish') || p.suggested_action?.includes('LONG')) {
+            direction = '做多'
+        } else if (p.prediction_cn?.includes('看跌') || p.prediction?.toLowerCase().includes('bearish') || p.suggested_action?.includes('SHORT')) {
+            direction = '做空'
+        }
     }
+
+    // 4. --- Validation Logic ---
+    const warnings = [...(p.risk_warning || p.warnings || ['市场波动大，请谨慎操作'])]
+    // (Already handled by Strategy-First logic above)
 
     // 2. Validate SL/Entry Logic
     if (direction === '做多') {
@@ -138,7 +142,7 @@ const formattedStrategy = computed(() => {
             condition: p.summary || p.technical_analysis?.sentiment || '建议分批入场'
         },
         stop_loss: {
-            price: Number(p.stop_loss) || 0,
+            price: Number(p.stop_loss) || Number(p.key_levels?.stop_loss) || 0,
             type: '硬止损',
             note: (p.trade_management && Array.isArray(p.trade_management)) ? 
                   p.trade_management.find((m: string) => m.includes('止损')) || '严格执行' : 
@@ -149,7 +153,7 @@ const formattedStrategy = computed(() => {
             price: Number(tp),
             close_percentage: Math.floor(100 / ((Array.isArray(p.take_profit) ? p.take_profit : [p.take_profit]).length || 1))
         })),
-        trade_management: p.trade_management || ['建议设置保本损', '注意重要支撑位数据'],
+        trade_management: p.trade_management || ['建议分批进场', '严格执行止损'],
         warnings: warnings
     }
 })

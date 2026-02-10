@@ -151,6 +151,9 @@ export const usePredictionStore = defineStore('prediction', () => {
      * 设置当前交易对
      */
     function setSymbol(symbol: string) {
+        if (currentSymbol.value === symbol && (prediction.value || loading.value.prediction)) {
+            return
+        }
         currentSymbol.value = symbol
         // 清除旧数据
         prediction.value = null
@@ -300,9 +303,14 @@ export const usePredictionStore = defineStore('prediction', () => {
                 promptTemplate
             )
 
-            // 流式结束后再拉取一次完整结果以更新界面结构化数据 (或者让后端在流结束最后发一个完整JSON)
-            // 目前策略是流结束后手动刷新一次标准分析以获取结构化数据
-            return await analyze(timeframe, true, depth, risk)
+            // B-MED-4 修复: 流式结束后从缓存获取结构化数据，避免第二次 AI 请求
+            // useCache=true 确保复用后端在流式分析期间生成的缓存结果
+            try {
+                return await analyze(timeframe, true, depth, risk)
+            } catch {
+                // 缓存未命中时不报错，界面仅展示流式文本
+                return null
+            }
         } catch (e: any) {
             error.value = e.message || '流式分析请求失败'
             throw e
@@ -320,8 +328,8 @@ export const usePredictionStore = defineStore('prediction', () => {
         loading.value.batch = true
         batchResults.value = {} // 重置之前的扫描结果
 
-        // 用户指定：仅分析 BTC 和 ETH
-        const targetSymbols = ['BTCUSDT', 'ETHUSDT']
+        // 用户指定：分析主流交易对
+        const targetSymbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT']
         scanProgress.value = { current: 0, total: targetSymbols.length }
 
         try {
@@ -337,11 +345,12 @@ export const usePredictionStore = defineStore('prediction', () => {
                     batchResults.value[r.symbol] = r
                     scanProgress.value.current++
                 })
+                // 持久化保存
+                localStorage.setItem('prediction_batch_results', JSON.stringify(batchResults.value))
             }
             return result
         } catch (e: any) {
             console.error('Batch scan failed:', e)
-            // throw e // Silent failure to prevent app crash
         } finally {
             loading.value.batch = false
         }
@@ -468,22 +477,31 @@ export const usePredictionStore = defineStore('prediction', () => {
      */
     function loadHistory() {
         try {
+            // 尝试从 localStorage 加载 batchResults
+            const savedBatch = localStorage.getItem('prediction_batch_results')
+            if (savedBatch) {
+                try {
+                    batchResults.value = JSON.parse(savedBatch)
+                } catch (e) {
+                    console.warn('Failed to parse saved batch results', e)
+                }
+            }
+
             const saved = localStorage.getItem('prediction_history')
             if (saved) {
                 history.value = JSON.parse(saved)
 
-                // 自动恢复最近一次的详细预测结果
+                // B-MED-5 修复: 自动恢复，但添加 24 小时过期判断
                 if (history.value.length > 0 && history.value[0].fullData && !prediction.value) {
-                    // Only restore if we don't have a fresh one (though on init we typically don't)
                     const lastRec = history.value[0]
-                    // Check if it's not too old (e.g. within 24 hours)? Optional but good practice.
-                    // For now, just restore it to match user expectation "last prediction shows up".
-                    if (lastRec.fullData) {
+                    const lastTime = lastRec.fullData?.analysis_time
+                    const isRecent = lastTime && (Date.now() - new Date(lastTime).getTime()) < 24 * 60 * 60 * 1000
+
+                    if (isRecent && lastRec.fullData) {
                         prediction.value = lastRec.fullData
-                    }
-                    // Restore symbol context too if needed
-                    if (lastRec.symbol) {
-                        currentSymbol.value = lastRec.symbol
+                        if (lastRec.symbol) {
+                            currentSymbol.value = lastRec.symbol
+                        }
                     }
                 }
             }
