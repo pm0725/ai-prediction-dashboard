@@ -19,7 +19,6 @@ from functools import wraps
 import hashlib
 import json
 from collections import OrderedDict
-from threading import Lock
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +67,20 @@ class TTLCache(Generic[T]):
         self.ttl_seconds = ttl_seconds
         self.name = name
         self._cache: OrderedDict[str, CacheEntry[T]] = OrderedDict()
-        self._lock = Lock()
         self._stats = CacheStats()
+        # 注意: 在单线程 asyncio 环境中不需要线程锁
+        # 使用无操作上下文管理器保持接口兼容
+        self._lock = self._noop_lock()
+
+    class _NoOpLock:
+        """可复用的无操作锁，在单线程 asyncio 中替代 threading.Lock 避免阻塞事件循环"""
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    @staticmethod
+    def _noop_lock():
+        """返回可复用的无操作锁实例"""
+        return TTLCache._NoOpLock()
     
     def _generate_key(self, *args, **kwargs) -> str:
         """生成缓存键"""

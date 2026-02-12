@@ -103,10 +103,13 @@ const formattedStrategy = computed(() => {
     } else if (Number(tpRaw) < entryMid && entryMid > 0 && Number(tpRaw) > 0) {
         direction = '做空'
     } else {
-        // Fallback: Detection by text signal
-        if (p.prediction_cn?.includes('看涨') || p.prediction?.toLowerCase().includes('bullish') || p.suggested_action?.includes('LONG')) {
+        // Fallback: Detection by text signal (Supporting both prediction and prediction_cn)
+        const predText = (p.prediction || p.prediction_cn || '').toLowerCase()
+        const actionText = (p.suggested_action || '').toUpperCase()
+        
+        if (predText.includes('看涨') || predText.includes('bull') || actionText.includes('LONG') || actionText.includes('买入')) {
             direction = '做多'
-        } else if (p.prediction_cn?.includes('看跌') || p.prediction?.toLowerCase().includes('bearish') || p.suggested_action?.includes('SHORT')) {
+        } else if (predText.includes('看跌') || predText.includes('bear') || actionText.includes('SHORT') || actionText.includes('卖出')) {
             direction = '做空'
         }
     }
@@ -117,15 +120,19 @@ const formattedStrategy = computed(() => {
 
     // 2. Validate SL/Entry Logic
     if (direction === '做多') {
-        if (Number(p.stop_loss) >= entryLow) {
-             warnings.unshift(`⚠️ 逻辑警告: 止损价 (${formatPrice(p.stop_loss)}) 高于入场低点 (${formatPrice(entryLow)})`)
+        if (Number(p.stop_loss) >= entryLow && Number(p.stop_loss) > 0) {
+             warnings.unshift(`⚠️ 逻辑警告: 止损价 (${formatPrice(p.stop_loss)}) 高于入场点位`)
         }
     } else if (direction === '做空') {
-        if (Number(p.stop_loss) <= entryHigh) {
-             warnings.unshift(`⚠️ 逻辑警告: 止损价 (${formatPrice(p.stop_loss)}) 低于入场高点 (${formatPrice(entryHigh)})`)
+        if (Number(p.stop_loss) <= entryHigh && Number(p.stop_loss) > 0) {
+             warnings.unshift(`⚠️ 逻辑警告: 止损价 (${formatPrice(p.stop_loss)}) 低于入场点位`)
         }
     }
     // --- Validation Logic End ---
+
+    // Filter and format take profit
+    const rawTP = Array.isArray(p.take_profit) ? p.take_profit : (p.take_profit ? [p.take_profit] : [])
+    const validTP = rawTP.filter((tp: any) => tp !== null && tp !== undefined && Number(tp) > 0)
 
     return {
         symbol: p.symbol,
@@ -148,12 +155,19 @@ const formattedStrategy = computed(() => {
                   p.trade_management.find((m: string) => m.includes('止损')) || '严格执行' : 
                   '严格执行'
         },
-        take_profit: (Array.isArray(p.take_profit) ? p.take_profit : [p.take_profit]).map((tp: any, idx: number) => ({
+        take_profit: (validTP.length > 0 ? validTP : [0]).map((tp: any, idx: number) => ({
             level: idx + 1,
             price: Number(tp),
-            close_percentage: Math.floor(100 / ((Array.isArray(p.take_profit) ? p.take_profit : [p.take_profit]).length || 1))
+            close_percentage: Math.floor(100 / (validTP.length || 1))
         })),
         trade_management: p.trade_management || ['建议分批进场', '严格执行止损'],
+        on_chain_context: p.on_chain_context || null,
+        pro_context: (p.vpvr || p.smc) ? {
+            vp_hvn: p.vpvr?.poc_hvn,
+            vp_lvn: p.vpvr?.vacuum_lvn,
+            order_blocks: p.smc?.order_blocks || [],
+            fvg_gaps: p.smc?.fvg_gaps || []
+        } : null,
         warnings: warnings
     }
 })

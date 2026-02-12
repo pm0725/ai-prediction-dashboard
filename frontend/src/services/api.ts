@@ -8,7 +8,7 @@ import { ElMessage } from 'element-plus'
 // 创建axios实例
 const api: AxiosInstance = axios.create({
     baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
-    timeout: 300000, // 5分钟超时，AI深度思考可能需要较长时间
+    timeout: 600000, // 10分钟超时，适应 R1 深思模式 + V3 降级重试
     headers: {
         'Content-Type': 'application/json'
     }
@@ -238,7 +238,10 @@ export const analysisApi = {
      * 获取AI预测分析
      */
     getPrediction: (symbol: string, timeframe: string = '4h', useCache: boolean = true, depth: string = 'standard', risk: number = 50, model?: string, promptTemplate?: string): Promise<PredictionResult> => {
-        return api.post(`/analysis/predict?use_cache=${useCache}`, {
+        // [Debug] Log request params
+        console.log(`[API] getPrediction: ${symbol} ${timeframe} cache=${useCache} model=${model}`)
+        // Add timestamp to prevent browser caching
+        return api.post(`/analysis/predict?use_cache=${useCache}&_t=${Date.now()}`, {
             symbol,
             timeframe,
             analysis_depth: depth,
@@ -273,7 +276,12 @@ export const analysisApi = {
      * 获取AI预测分析 (流式)
      */
     getStreamPrediction: async (symbol: string, timeframe: string = '4h', depth: string = 'standard', risk: number = 50, onChunk: (text: string) => void, model?: string, promptTemplate?: string): Promise<void> => {
-        const response = await fetch('/api/analysis/predict/stream', {
+        const baseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
+        // Ensure no double slash between base and endpoint, and api/analysis structure is correct
+        // If baseUrl is '/api' or 'http.../api', we append '/analysis/...'
+        const url = `${baseUrl.replace(/\/+$/, '')}/analysis/predict/stream`
+
+        const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -285,6 +293,12 @@ export const analysisApi = {
                 prompt_template: promptTemplate
             })
         })
+
+        // CRIT-4 Fix: Check for HTTP errors before trying to read the stream
+        if (!response.ok) {
+            const errorText = await response.text()
+            throw new Error(`Stream request failed: ${response.status} - ${errorText}`)
+        }
 
         if (!response.body) throw new Error('ReadableStream not supported')
 
@@ -351,6 +365,13 @@ export const analysisApi = {
      */
     getDepth: (symbol: string): Promise<any> => {
         return api.get('/market/depth', { params: { symbol } })
+    },
+
+    /**
+     * 获取战情室仪表盘数据
+     */
+    getWarRoomDashboard: (symbol: string): Promise<any> => {
+        return api.get(`/market/war-room/${symbol}`)
     }
 }
 

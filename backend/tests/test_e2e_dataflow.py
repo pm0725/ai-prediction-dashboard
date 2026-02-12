@@ -60,7 +60,7 @@ class DataFlowTester:
             market_data = await fetcher.get_market_data(
                 self.symbol, 
                 self.timeframe, 
-                kline_limit=50
+                kline_limit=350
             )
             
             klines = market_data.get("klines", [])
@@ -73,6 +73,13 @@ class DataFlowTester:
             print_result("K线数据", f"{len(klines)} 根K线")
             print_result("Ticker", f"价格: {ticker.last_price if ticker else '(模拟)'}")
             print_result("资金费率", f"{funding.funding_rate * 100:.4f}%" if funding else "(无)")
+            
+            # 验证基本面数据
+            fundamentals = market_data.get("fundamental_data")
+            if fundamentals:
+                print_result("基本面(CoinGecko)", f"开发者评分: {fundamentals.get('developer_score')} | 社区评分: {fundamentals.get('community_score')}")
+            else:
+                print("  ⚠️ 未获取到基本面数据 (可能因API限制或ID映射缺失)")
             
             return len(klines) > 0
             

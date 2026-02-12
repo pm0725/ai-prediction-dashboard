@@ -142,6 +142,34 @@ def normalize_symbol(symbol: str) -> str:
 # 交易所基类
 # ============================================================
 
+COINGECKO_MAPPING = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "BNB": "binancecoin",
+    "XRP": "ripple",
+    "DOGE": "dogecoin",
+    "ADA": "cardano",
+    "AVAX": "avalanche-2",
+    "TRX": "tron",
+    "DOT": "polkadot",
+    "LINK": "chainlink",
+    "MATIC": "matic-network",
+    "SHIB": "shiba-inu",
+    "LTC": "litecoin",
+    "UNI": "uniswap",
+    "BCH": "bitcoin-cash",
+    "NEAR": "near",
+    "APT": "aptos",
+    "QNT": "quant-network",
+    "FIL": "filecoin",
+    "ATOM": "cosmos",
+    "IMX": "immutable-x",
+    "ARB": "arbitrum",
+    "OP": "optimism",
+    "SUI": "sui"
+}
+
 class BaseExchange:
     """交易所基类"""
     
@@ -152,7 +180,7 @@ class BaseExchange:
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=30)
-            self._session = aiohttp.ClientSession(timeout=timeout)
+            self._session = aiohttp.ClientSession(timeout=timeout, trust_env=True)
         return self._session
     
     async def close(self):
@@ -166,24 +194,55 @@ class BaseExchange:
         params: Optional[Dict] = None,
         headers: Optional[Dict] = None
     ) -> Dict[str, Any]:
-        """发送HTTP请求"""
-        """发送HTTP请求"""
-        session = await self._get_session()
+        """发送HTTP请求 (带自动重试和会话重置)"""
         
-        # 获取代理配置
-        proxy = os.getenv("HTTP_PROXY") or os.getenv("http_proxy") or os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
+        # 获取代理配置 (优先使用 HTTPS_PROXY)
+        proxy = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy") or \
+                os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
         
-        try:
-            async with session.request(method, url, params=params, headers=headers, proxy=proxy) as resp:
-                if resp.status == 200:
-                    return await resp.json()
-                else:
-                    text = await resp.text()
-                    logger.error(f"API请求失败 ({url}): {resp.status} - {text}")
-                    raise Exception(f"API错误: {resp.status} - {text}")
-        except asyncio.TimeoutError:
-            logger.error(f"API请求超时: {url}")
-            raise Exception("请求超时")
+        # [Debug] 强制检查代理并应用兜底
+        if not proxy:
+            default_proxy = "http://127.0.0.1:7890"
+            if "binance" in url: # 仅对需要翻墙的API应用兜底
+                 proxy = default_proxy
+            
+        # 增加重试循环，处理连接断开或DNS污染问题
+        for attempt in range(2):
+            try:
+                session = await self._get_session()
+                
+                if attempt == 0:
+                     logger.debug(f"API请求 [{method}] {url.split('?')[0]} | Proxy: {proxy}")
+                
+                async with session.request(method, url, params=params, headers=headers, proxy=proxy) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+                    else:
+                        text = await resp.text()
+                        logger.warning(f"API响应非200 ({resp.status}) | URL: {url} | Body: {text[:200]}")
+                        
+                        # 遇到 5xx 或 429 错误，抛出 ClientError 以触发重试
+                        if 500 <= resp.status < 600 or resp.status == 429:
+                             raise aiohttp.ClientError(f"Server Error {resp.status}")
+                             
+                        raise Exception(f"API错误: {resp.status} - {text}")
+
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+                logger.warning(f"API请求失败 (Attempt {attempt+1}/2): {e} | URL: {url.split('?')[0]}")
+                
+                # 如果是连接层面的错误，尝试重置会话
+                # 这对解决 'Connect call failed' (DNS污染/IP变更) 这一类问题至关重要
+                if attempt == 0:
+                    logger.warning(">>> 检测到连接/网络异常，正在重置会话并重试...")
+                    if self._session and not self._session.closed:
+                        await self._session.close()
+                    self._session = None # 强制下次重建会话
+                    # 稍微等待一下
+                    await asyncio.sleep(0.5)
+                    continue
+                
+                # 第二次也失败，抛出最终异常
+                raise Exception(f"API请求最终失败: {e}")
     
     async def get_klines(
         self,
@@ -422,10 +481,11 @@ class DataFetcher:
     ) -> Dict[str, Any]:
         """获取完整市场数据"""
         # 并发获取所有数据
-        klines, ticker, funding = await asyncio.gather(
+        klines, ticker, funding, fundamentals = await asyncio.gather(
             self.get_klines(symbol, timeframe, kline_limit),
             self.get_ticker(symbol),
             self.get_funding_rate(symbol),
+            self.get_token_fundamentals(symbol),
             return_exceptions=True
         )
         
@@ -435,8 +495,74 @@ class DataFetcher:
             "klines": klines if not isinstance(klines, Exception) else [],
             "ticker": ticker if not isinstance(ticker, Exception) else None,
             "funding": funding if not isinstance(funding, Exception) else None,
+            "fundamental_data": fundamentals if not isinstance(fundamentals, Exception) else None,
             "timestamp": datetime.now().isoformat()
         }
+        
+    async def get_token_fundamentals(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        获取代币基本面数据 (CoinGecko)
+        
+        Args:
+            symbol: 交易对符号 (e.g., "BTCUSDT")
+            
+        Returns:
+            dict: 基本面数据 or None
+        """
+        # 1. 解析基础币种
+        base_asset = normalize_symbol(symbol).replace("USDT", "").replace("USDC", "")
+        if base_asset == "BTC": base_asset = "BTC" # Normalized as BTCUSDT -> BTC
+        
+        # 2. 映射 ID
+        cg_id = COINGECKO_MAPPING.get(base_asset)
+        if not cg_id:
+            logger.debug(f"未找到 {base_asset} 的 CoinGecko ID映射")
+            return None
+            
+        # 3. 调用 API
+        # CoinGecko 免费 API (无需Key, 30 req/min)
+        url = f"https://api.coingecko.com/api/v3/coins/{cg_id}"
+        params = {
+            "localization": "false",
+            "tickers": "false",
+            "market_data": "true",
+            "community_data": "true",
+            "developer_data": "true",
+            "sparkline": "false"
+        }
+        
+        try:
+            # 使用临时 Session 或复用 BaseExchange 的 Session (这里简化直接用 aiohttp)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, timeout=5.0) as response:
+                    if response.status == 429:
+                        logger.warning("CoinGecko API 限流 (429)")
+                        return None
+                    if response.status != 200:
+                        logger.warning(f"CoinGecko API 错误: {response.status}")
+                        return None
+                        
+                    data = await response.json()
+                    
+                    # 4. 提取关键字段
+                    market_data = data.get("market_data", {})
+                    
+                    return {
+                        "id": data.get("id"),
+                        "name": data.get("name"),
+                        "sentiment_votes_up_percentage": data.get("sentiment_votes_up_percentage"),
+                        "community_score": data.get("community_score"),
+                        "developer_score": data.get("developer_score"),
+                        "public_interest_score": data.get("public_interest_score"),
+                        "total_volume": market_data.get("total_volume", {}).get("usd"),
+                        "market_cap": market_data.get("market_cap", {}).get("usd"),
+                        "ath_change_percentage": market_data.get("ath_change_percentage", {}).get("usd"),
+                        "price_change_24h": market_data.get("price_change_percentage_24h")
+                    }
+                    
+        except Exception as e:
+            logger.error(f"获取 {base_asset} 基本面数据失败: {e}")
+            return None
 
 
 # ============================================================

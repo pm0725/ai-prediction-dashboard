@@ -47,6 +47,58 @@ except ImportError:
     TA_AVAILABLE = False
     logger.warning("ta 库未安装,技术指标计算将使用简化版本")
 
+from app.models.indicators import TechnicalIndicators
+
+
+# ============================================================
+# 数据缓存层 (TTL Cache)
+# ============================================================
+import time as _time
+
+class DataCache:
+    """
+    简易 TTL 数据缓存
+    
+    用于避免短时间内重复请求相同的 API 数据。
+    线程安全 (通过 asyncio.Lock)。
+    """
+    def __init__(self, default_ttl: int = 30):
+        self._store: dict[str, tuple[float, Any]] = {}
+        self._ttl = default_ttl
+        self._lock = asyncio.Lock()
+    
+    async def get(self, key: str) -> Optional[Any]:
+        async with self._lock:
+            if key in self._store:
+                ts, val = self._store[key]
+                if _time.time() - ts < self._ttl:
+                    return val
+                del self._store[key]
+        return None
+    
+    async def set(self, key: str, value: Any, ttl: Optional[int] = None):
+        async with self._lock:
+            self._store[key] = (_time.time(), value)
+    
+    async def clear(self):
+        async with self._lock:
+            self._store.clear()
+
+# 全局缓存实例
+_data_cache = DataCache(default_ttl=30)
+
+# 全局 BinanceDataFetcher 单例
+_global_fetcher: Optional[Any] = None
+_global_fetcher_lock = asyncio.Lock()
+
+async def get_global_fetcher(api_key: str = "", api_secret: str = ""):
+    """获取全局 BinanceDataFetcher 单例 (避免每次重建连接)"""
+    global _global_fetcher
+    async with _global_fetcher_lock:
+        if _global_fetcher is None:
+            _global_fetcher = BinanceDataFetcher(api_key, api_secret)
+        return _global_fetcher
+
 
 # ============================================================
 # 数据结构定义
@@ -65,58 +117,7 @@ class KlineData:
     trades: int
 
 
-@dataclass
-class TechnicalIndicators:
-    """技术指标数据"""
-    # 移动平均 (无默认值)
-    sma_20: float
-    sma_50: float
-    ema_12: float
-    ema_26: float
-    
-    # RSI (无默认值)
-    rsi_14: float
-    
-    # MACD (无默认值)
-    macd_line: float
-    macd_signal: float
-    macd_histogram: float
-    
-    # 布林带 (无默认值)
-    bb_upper: float
-    bb_middle: float
-    bb_lower: float
-    bb_width: float
-    
-    # 波动率 (无默认值)
-    atr_14: float
-    
-    # 趋势状态 (无默认值)
-    trend_status: str  # "bullish", "bearish", "neutral"
-    ma_cross_status: str  # "golden_cross", "death_cross", "none"
-    
-    # ========== 以下为有默认值的字段 ==========
-    # 新增: EMA快慢线
-    ema_9: float = 0.0
-    ema_21: float = 0.0
-    ema_cross_status: str = ""  # EMA9/21交叉状态
-    
-    # K线形态 (新增)
-    candlestick_patterns: list = None  # ["锤子线", "看涨吞没"]
-    
-    # 信号冲突检测 (新增)
-    signal_conflicts: list = None  # ["指标冲突1", "指标冲突2"]
-    
-    # 趋势线 (新增)
-    trend_lines: dict = None  # {resistance, support, breakout}
-    
-    def __post_init__(self):
-        if self.candlestick_patterns is None:
-            self.candlestick_patterns = []
-        if self.signal_conflicts is None:
-            self.signal_conflicts = []
-        if self.trend_lines is None:
-            self.trend_lines = {}
+
 
 
 @dataclass
@@ -136,7 +137,9 @@ class MarketContext:
     # 新增字段
     order_book: Optional[dict] = None          # 订单簿摘要
     trend_kline_summary: Optional[str] = None  # 趋势周期K线摘要
+    trend_klines: Optional[list[dict]] = None  # 趋势周期原始K线
     trend_indicators: Optional[TechnicalIndicators] = None # 趋势周期指标
+    fundamental_data: Optional[dict] = None    # 基本面数据 (CoinGecko)
     fear_greed_index: Optional[dict] = None    # 恐惧贪婪指数
     
     # 新增: 机构级预警字段
@@ -147,6 +150,12 @@ class MarketContext:
     # 新增: 传统技术支撑/阻力 (Traditional TA)
     pivot_points: Optional[dict] = None        # Pivot Points
     swing_levels: Optional[dict] = None        # Swing Highs/Lows
+    
+    # 新增: 多空比/历史费率/BTC上下文
+    long_short_ratio: Optional[float] = None   # 多空持仓人数比
+    funding_rate_history: Optional[dict] = None # 历史资金费率序列与趋势
+    btc_context: Optional[dict] = None         # BTC 大盘上下文 (山寨币用)
+    volume_ratio: float = 1.0                  # 相对成交量
 
     def to_dict(self) -> dict[str, Any]:
         """转换为字典格式,供AI分析使用"""
@@ -161,9 +170,15 @@ class MarketContext:
             "ma_status": self._format_ma_status(),
             "ema_status": self._format_ema_status(),  # 新增
             "bollinger": self._format_bollinger(),
-            "atr": self.indicators.atr_14,  # 新增: ATR波动率
+            "atr": self.indicators.atr_14,  # ATR波动率
             "news_headlines": self.news_headlines,
             "market_sentiment": self.market_sentiment,
+            # ADX 趋势强度
+            "adx": self.indicators.adx,
+            "adx_status": self.indicators.adx_status,
+            # VWAP
+            "vwap": self.indicators.vwap,
+            "vwap_deviation": self.indicators.vwap_deviation,
             # 新增: K线形态和信号冲突
             "candlestick_patterns": self.indicators.candlestick_patterns,
             "signal_conflicts": self.indicators.signal_conflicts,
@@ -191,8 +206,11 @@ class MarketContext:
                 # New fields for Trend Alignment
                 "ema_21": self.trend_indicators.ema_21 if self.trend_indicators else None,
                 "bb_width": self.trend_indicators.bb_width if self.trend_indicators else None,
+                "bb_width": self.trend_indicators.bb_width if self.trend_indicators else None,
                 "candlestick_patterns": self.trend_indicators.candlestick_patterns if self.trend_indicators else []
             }
+            if self.trend_klines:
+                data["trend_context"]["klines"] = self.trend_klines
         
         # 注入恐惧贪婪指数
         if self.fear_greed_index:
@@ -200,7 +218,32 @@ class MarketContext:
             
         # 注入理论清算价格
         data["liquidation_levels"] = self._calculate_liquidation_levels()
+        
+        # 注入多空比
+        if self.long_short_ratio is not None:
+            data["long_short_ratio"] = self.long_short_ratio
+        
+        # 注入历史资金费率趋势
+        if self.funding_rate_history:
+            data["funding_rate_history"] = self.funding_rate_history
+        
+        # 注入BTC上下文 (山寨币分析时)
+        if self.btc_context:
+            data["btc_context"] = self.btc_context
+        
+        # 注入相对成交量
+        data["volume_ratio"] = self.volume_ratio
             
+        # ========== V2.0 Pro: SMC & VPVR ==========
+        data["vpvr"] = {
+            "poc_hvn": self.indicators.vp_hvn, # 成交密集区
+            "vacuum_lvn": self.indicators.vp_lvn # 成交真空区
+        }
+        data["smc"] = {
+            "order_blocks": self.indicators.order_blocks, # 机构订单块
+            "fvg_gaps": self.indicators.fvg_gaps # 价格缺口
+        }
+        
         return data
     
     def _format_macd(self) -> str:
@@ -330,9 +373,15 @@ async def get_fear_greed_index(session: Optional[Any] = None) -> dict:
         session = aiohttp.ClientSession()
         session_owner = True
         
+    # 获取代理配置 (优先使用 HTTPS_PROXY)
+    proxy = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy") or \
+            os.getenv("HTTP_PROXY") or os.getenv("http_proxy") or \
+            "http://127.0.0.1:7890"
+
     try:
         async with session.get(
             "https://api.alternative.me/fng/?limit=1",
+            proxy=proxy,
             timeout=aiohttp.ClientTimeout(total=5)
         ) as response:
                 if response.status == 200:
@@ -365,6 +414,75 @@ async def get_fear_greed_index(session: Optional[Any] = None) -> dict:
             await session.close()
     
     return {"value": 50, "classification": "中性", "timestamp": ""}
+
+
+async def get_crypto_news(symbol: str = "BTC", session: Optional[Any] = None) -> list[str]:
+    """
+    获取加密货币新闻 (CryptoPanic 免费API)
+    
+    Returns:
+        list[str]: 新闻标题列表 (最多5条)
+    """
+    import aiohttp
+    
+    # 提取币种名 (BTCUSDT -> BTC)
+    coin = symbol.replace("USDT", "").replace("usdt", "").replace("1000", "")
+    
+    api_key = os.getenv("CRYPTOPANIC_API_KEY", "")
+    proxy = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy") or \
+            os.getenv("HTTP_PROXY") or os.getenv("http_proxy") or None
+    
+    session_owner = session is None
+    _session = session or aiohttp.ClientSession()
+    
+    try:
+        if api_key:
+            # 使用 CryptoPanic API
+            url = "https://cryptopanic.com/api/free/v1/posts/"
+            params = {
+                "auth_token": api_key,
+                "currencies": coin,
+                "kind": "news",
+                "filter": "important",
+                "public": "true"
+            }
+            try:
+                async with _session.get(url, params=params, proxy=proxy, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        results = data.get("results", [])
+                        headlines = []
+                        for post in results[:5]:
+                            title = post.get("title", "")
+                            votes = post.get("votes", {})
+                            sentiment = votes.get("positive", 0) - votes.get("negative", 0)
+                            sentiment_label = "👍" if sentiment > 0 else ("👎" if sentiment < 0 else "")
+                            headlines.append(f"{title} {sentiment_label}".strip())
+                        return headlines
+            except Exception as e:
+                logger.debug(f"CryptoPanic API 失败: {e}")
+        
+        # 无API Key时回退到 CoinGecko 热搜趋势 (无需key)
+        try:
+            alt_url = "https://api.coingecko.com/api/v3/search/trending"
+            async with _session.get(alt_url, proxy=proxy, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    trending = data.get("coins", [])[:5]
+                    headlines = [
+                        f"{c['item']['name']}({c['item']['symbol']}) 热度排名#{c['item'].get('market_cap_rank') or 'N/A'}"
+                        for c in trending
+                    ]
+                    return headlines
+        except Exception as e:
+            logger.debug(f"CoinGecko 热搜获取失败: {e}")
+    except Exception:
+        pass
+    finally:
+        if session_owner and _session:
+            await _session.close()
+    
+    return []
 
 
 async def get_global_market_stats() -> dict:
@@ -490,7 +608,100 @@ class BinanceDataFetcher:
             return
         if self.client is None:
             self.client = await self._create_new_client()
-            logger.info("BinanceDataFetcher 长连接会话已建立")
+            logger.info("BinanceDataFetcher: 长连接会话已启动")
+        return self.client
+    
+    async def get_token_fundamentals(self, symbol: str) -> Optional[dict]:
+        """
+        获取代币基本面数据 (CoinGecko) - Ported from DataFetcher
+        """
+        # 1. 简易映射表 (局部定义以避免全局污染)
+        COINGECKO_MAPPING = {
+            "BTC": "bitcoin",
+            "ETH": "ethereum",
+            "SOL": "solana",
+            "BNB": "binancecoin",
+            "XRP": "ripple",
+            "DOGE": "dogecoin",
+            "ADA": "cardano",
+            "AVAX": "avalanche-2",
+            "TRX": "tron",
+            "DOT": "polkadot",
+            "LINK": "chainlink",
+            "MATIC": "matic-network",
+            "SHIB": "shiba-inu",
+            "LTC": "litecoin",
+            "UNI": "uniswap",
+            "BCH": "bitcoin-cash",
+            "NEAR": "near",
+            "APT": "aptos",
+        }
+        
+        # 2. 解析基础币种
+        base_asset = symbol.replace("USDT", "").replace("USDC", "")
+        if base_asset == "BTC": base_asset = "BTC"
+        
+        cg_id = COINGECKO_MAPPING.get(base_asset)
+        if not cg_id:
+            return None
+            
+        # 3. 调用 API
+        import aiohttp
+        url = f"https://api.coingecko.com/api/v3/coins/{cg_id}"
+        params = {
+            "localization": "false",
+            "tickers": "false",
+            "market_data": "true",
+            "community_data": "true",
+            "developer_data": "true",
+            "sparkline": "false"
+        }
+        
+        # 使用临时 session 或复用 data_fetcher 的 session 逻辑
+        # 这里简单起见使用临时 session
+        proxy = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy") or \
+                os.getenv("HTTP_PROXY") or os.getenv("http_proxy") or None
+                
+        # 简单重试机制 (处理 429)
+        import asyncio
+        for attempt in range(3):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, params=params, proxy=proxy, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                        if response.status == 429:
+                            if attempt < 2:
+                                wait_time = 2 * (attempt + 1)
+                                logger.warning(f"CoinGecko API 限流 (429), 等待 {wait_time}s 重试...")
+                                await asyncio.sleep(wait_time)
+                                continue
+                            else:
+                                logger.warning("CoinGecko API 限流 (429), 重试次数耗尽")
+                                return None
+                                
+                        if response.status == 200:
+                            data = await response.json()
+                            market_data = data.get("market_data", {})
+                            
+                            return {
+                                "id": data.get("id"),
+                                "name": data.get("name"),
+                                "sentiment_votes_up_percentage": data.get("sentiment_votes_up_percentage"),
+                                "community_score": data.get("community_score"),
+                                "developer_score": data.get("developer_score"),
+                                "public_interest_score": data.get("public_interest_score"),
+                                "total_volume": market_data.get("total_volume", {}).get("usd"),
+                                "market_cap": market_data.get("market_cap", {}).get("usd"),
+                                "ath_change_percentage": market_data.get("ath_change_percentage", {}).get("usd"),
+                                "price_change_24h": market_data.get("price_change_percentage_24h")
+                            }
+                        else:
+                            logger.warning(f"CoinGecko API 错误: {response.status}")
+                            return None
+            except Exception as e:
+                logger.debug(f"基本面获取失败({symbol}): {e}")
+                return None
+            
+        return None
 
     async def close_session(self):
         """关闭长连接会话"""
@@ -504,10 +715,14 @@ class BinanceDataFetcher:
         if not BINANCE_AVAILABLE:
             return None
             
+        proxy = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy") or \
+                os.getenv("HTTP_PROXY") or os.getenv("http_proxy") or \
+                "http://127.0.0.1:7890"
+        
         requests_params = {}
-        proxy = os.getenv("HTTP_PROXY") or os.getenv("http_proxy") or os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
         if proxy:
             requests_params['proxies'] = {'http': proxy, 'https': proxy}
+            logger.debug(f"Binance AsyncClient 创建中 | Proxy: {proxy}")
         
         # 设置超时 (如果库支持)
         requests_params['timeout'] = 10
@@ -615,54 +830,120 @@ class BinanceDataFetcher:
             return results
             
         client = await self._get_client()
+        async def _fetch_single_ticker(sym):
+            try:
+                # API weight: 1
+                return await client.futures_ticker(symbol=sym)
+            except Exception as e:
+                logger.warning(f"Fetch ticker failed for {sym}: {e}")
+                return None
+
         try:
-            # 获取所有ticker,这是一次调用高效获取所有市场数据
-            all_tickers = await client.futures_ticker()
-            
-            # 创建快速查找字典
-            ticker_map = {t['symbol']: t for t in all_tickers}
-            
-            for symbol in symbols:
-                if symbol in ticker_map:
-                    t = ticker_map[symbol]
-                    results.append({
-                        "symbol": symbol,
-                        "price": float(t['lastPrice']),
-                        "change_percent": float(t['priceChangePercent']),
-                        "quote_volume": float(t['quoteVolume']) # Added for Volume Spike Detection
-                    })
+            # FIX 429: If symbols count is small, fetch individually to save weight
+            # Single symbol weight = 1. All symbols weight = 40.
+            # So if we have < 40 symbols, individual is theoretically cheaper/same, 
+            # but for concurrency overhead, let's say < 10 is definitely better.
+            if len(symbols) > 0 and len(symbols) <= 10:
+                tasks = [_fetch_single_ticker(s) for s in symbols]
+                results_raw = await asyncio.gather(*tasks)
+                
+                for t in results_raw:
+                    if t:
+                        results.append({
+                            "symbol": t['symbol'],
+                            "price": float(t['lastPrice']),
+                            "change_percent": float(t['priceChangePercent']),
+                            "quote_volume": float(t['quoteVolume'])
+                        })
+            else:
+                # Fallback to fetching all tickers (Weight: 40)
+                all_tickers = await client.futures_ticker()
+                ticker_map = {t['symbol']: t for t in all_tickers}
+                
+                for symbol in symbols:
+                    try:
+                        if symbol in ticker_map:
+                            t = ticker_map[symbol]
+                            results.append({
+                                "symbol": symbol,
+                                "price": float(t['lastPrice']),
+                                "change_percent": float(t['priceChangePercent']),
+                                "quote_volume": float(t['quoteVolume'])
+                            })
+                    except Exception as e:
+                        logger.error(f"解析Ticker数据失败 [{symbol}]: {e}")
+                            
         except Exception as e:
-            logger.error(f"获取Ticker失败: {e}")
-        finally:
-            if client:
-                await self._close_temp_client(client)
+            logger.error(f"获取Ticker最终失败: {e}")
+            # 返回空列表而不是抛出异常，防止上层接口 500
+            return []
                 
         return results
 
     async def get_long_short_ratio(self, symbol: str) -> Optional[float]:
-        """获取多空持仓人数比"""
+        """
+        获取多空持仓人数比 (直接调用 Binance REST API，绕过 python-binance 版本限制)
+        """
         symbol = normalize_symbol(symbol)
-        if not BINANCE_AVAILABLE:
-            return None
-            
-        client = await self._get_client()
+        
+        proxy = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy") or \
+                os.getenv("HTTP_PROXY") or os.getenv("http_proxy") or \
+                "http://127.0.0.1:7890"
+        
+        url = f"https://fapi.binance.com/futures/data/topLongShortAccountRatio"
+        params = {"symbol": symbol, "period": "5m", "limit": 1}
+        
         try:
-            # Top Long/Short Account Ratio (5m)
-            # 注意: 此API可能在某些python-binance版本中不可用
-            if not hasattr(client, 'futures_top_long_short_account_ratio'):
-                logger.debug("python-binance版本不支持futures_top_long_short_account_ratio")
-                return None
-            info = await client.futures_top_long_short_account_ratio(symbol=symbol, period="5m", limit=1)
-            if info:
-                return float(info[0]['longShortRatio'])
-        except AttributeError:
-            logger.debug("多空比API方法不存在,跳过")
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, proxy=proxy, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data:
+                            ratio = float(data[0]['longShortRatio'])
+                            logger.debug(f"{symbol} 多空比: {ratio:.3f}")
+                            return ratio
         except Exception as e:
             logger.debug(f"获取多空比失败 (非关键): {e}")
+        return None
+
+    async def get_funding_rate_history(self, symbol: str, limit: int = 24) -> list[dict]:
+        """
+        获取历史资金费率序列 (近 limit 期)
+        用于判断费率趋势方向
+        """
+        symbol = normalize_symbol(symbol)
+        if not BINANCE_AVAILABLE:
+            return []
+        
+        client = await self._get_client()
+        try:
+            info = await client.futures_funding_rate(symbol=symbol, limit=limit)
+            result = []
+            for item in info:
+                result.append({
+                    "rate": float(item['fundingRate']),
+                    "time": item.get('fundingTime', 0)
+                })
+            if result:
+                rates = [r['rate'] for r in result]
+                avg = sum(rates) / len(rates)
+                recent_avg = sum(rates[-3:]) / min(3, len(rates))
+                trend = "上升" if recent_avg > avg else ("下降" if recent_avg < avg else "平稳")
+                logger.debug(f"{symbol} 资金费率趋势: {trend} (均值: {avg*100:.4f}%, 近期: {recent_avg*100:.4f}%)")
+                return {
+                    "current": rates[-1] if rates else 0,
+                    "avg_24": avg,
+                    "recent_avg": recent_avg,
+                    "trend": trend,
+                    "history": rates[-8:]  # 只传近8期给AI节省token
+                }
+        except Exception as e:
+            logger.debug(f"获取历史资金费率失败: {e}")
         finally:
             if client:
                 await self._close_temp_client(client)
-        return None
+        return {}
 
     async def get_order_book(self, symbol: str, limit: int = 100) -> dict:
         """
@@ -823,9 +1104,10 @@ def calculate_indicators(df: pd.DataFrame) -> TechnicalIndicators:
             rs = avg_gain / avg_loss
             rsi = (100 - (100 / (1 + rs))).iloc[-1]
         
-        # 简化MACD
-        macd_line = ema_12 - ema_26
-        macd_signal = pd.Series([ema_12 - ema_26]).ewm(span=9).mean().iloc[-1]
+        # 简化MACD (修复: 使用完整序列计算信号线)
+        macd_series = close.ewm(span=12).mean() - close.ewm(span=26).mean()
+        macd_line = macd_series.iloc[-1]
+        macd_signal = macd_series.ewm(span=9).mean().iloc[-1]
         macd_histogram = macd_line - macd_signal
         
         # 简化布林带
@@ -890,6 +1172,72 @@ def calculate_indicators(df: pd.DataFrame) -> TechnicalIndicators:
     # ========== 新增: 趋势线识别 ==========
     trend_lines = _detect_trend_lines(df)
     
+    # ========== 新增: 成交量分析 ==========
+    vol = df['volume']
+    vol_ma20 = vol.rolling(window=20).mean()
+    current_vol = vol.iloc[-1]
+    avg_vol = vol_ma20.iloc[-1]
+    
+    volume_ratio = current_vol / avg_vol if avg_vol > 0 else 1.0
+    volume_status = "normal"
+    if volume_ratio < 0.8: volume_status = "low"
+    elif volume_ratio > 2.5: volume_status = "ultra_high"
+    elif volume_ratio > 1.5: volume_status = "high"
+    
+    # ========== 新增: ADX 趋势强度 ==========
+    adx_val = 0.0
+    adx_status = "无趋势"
+    try:
+        if TA_AVAILABLE:
+            from ta.trend import ADXIndicator
+            adx_indicator = ADXIndicator(high, low, close, window=14)
+            adx_val = _safe_float(adx_indicator.adx().iloc[-1], 0.0)
+        else:
+            # 简化 ADX 计算
+            tr = pd.concat([
+                high - low,
+                abs(high - close.shift()),
+                abs(low - close.shift())
+            ], axis=1).max(axis=1)
+            plus_dm = (high - high.shift()).clip(lower=0)
+            minus_dm = (low.shift() - low).clip(lower=0)
+            # 当 +DM < -DM 时 +DM=0，反之亦然
+            mask = plus_dm < minus_dm
+            plus_dm[mask] = 0
+            minus_dm[~mask] = 0
+            atr_s = tr.ewm(alpha=1/14, min_periods=14).mean()
+            plus_di = 100 * (plus_dm.ewm(alpha=1/14, min_periods=14).mean() / atr_s)
+            minus_di = 100 * (minus_dm.ewm(alpha=1/14, min_periods=14).mean() / atr_s)
+            dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)
+            adx_val = _safe_float(dx.ewm(alpha=1/14, min_periods=14).mean().iloc[-1], 0.0)
+        
+        if adx_val >= 25:
+            adx_status = "强趋势"
+        elif adx_val >= 20:
+            adx_status = "弱趋势"
+        else:
+            adx_status = "无趋势"
+    except Exception as e:
+        logger.debug(f"ADX 计算失败: {e}")
+    
+    # ========== 新增: VWAP (成交量加权均价) ==========
+    vwap_val = 0.0
+    vwap_deviation = 0.0
+    try:
+        typical_price = (high + low + close) / 3
+        cumulative_tpv = (typical_price * df['volume']).cumsum()
+        cumulative_vol = df['volume'].cumsum()
+        vwap_series = cumulative_tpv / cumulative_vol
+        vwap_val = _safe_float(vwap_series.iloc[-1], current_price)
+        if vwap_val > 0:
+            vwap_deviation = (current_price - vwap_val) / vwap_val * 100
+    except Exception as e:
+        logger.debug(f"VWAP 计算失败: {e}")
+    
+    # ========== V2.0 Pro: SMC & VPVR ==========
+    vp_data = _calculate_vpvr(df)
+    smc_data = _detect_smc_indicators(df)
+    
     return TechnicalIndicators(
         sma_20=_safe_float(sma_20),
         sma_50=_safe_float(sma_50),
@@ -911,7 +1259,18 @@ def calculate_indicators(df: pd.DataFrame) -> TechnicalIndicators:
         ema_cross_status=ema_cross_status,
         candlestick_patterns=candlestick_patterns,
         signal_conflicts=signal_conflicts,
-        trend_lines=trend_lines
+        trend_lines=trend_lines,
+        volume_ratio=_safe_float(volume_ratio),
+        volume_status=volume_status,
+        adx=_safe_float(adx_val),
+        adx_status=adx_status,
+        vwap=_safe_float(vwap_val),
+        vwap_deviation=round(_safe_float(vwap_deviation), 2),
+        # V2.0 Pro fields
+        vp_hvn=vp_data["hvn"],
+        vp_lvn=vp_data["lvn"],
+        order_blocks=smc_data["order_blocks"],
+        fvg_gaps=smc_data["fvg_gaps"]
     )
 
 
@@ -1026,6 +1385,129 @@ def _detect_trend_lines(df: pd.DataFrame) -> dict:
         
     result["breakout"] = breakout
     return result
+
+
+def _calculate_vpvr(df: pd.DataFrame, bins: int = 40) -> dict:
+    """
+    计算成交分布图 (Volume Profile Visible Range)
+    用于识别成交密集区(HVN)和真空区(LVN)
+    """
+    try:
+        if len(df) < 5:
+            return {"hvn": None, "lvn": None}
+            
+        low = df['low'].min()
+        high = df['high'].max()
+        if high == low:
+            return {"hvn": None, "lvn": None}
+            
+        # 建立价格分箱
+        price_bins = np.linspace(low, high, bins + 1)
+        volume_profile = np.zeros(bins)
+        
+        for _, row in df.iterrows():
+            # 简单模型：成交量均匀分布在K线高低点之间
+            hl_diff = row['high'] - row['low']
+            if hl_diff == 0:
+                # 给所在分箱加成交量
+                mask = (price_bins[:-1] <= row['high']) & (price_bins[1:] >= row['low'])
+            else:
+                mask = (price_bins[:-1] <= row['high']) & (price_bins[1:] >= row['low'])
+            
+            if mask.any():
+                volume_profile[mask] += row['volume'] / mask.sum()
+        
+        # 寻找 HVN (POC)
+        max_idx = np.argmax(volume_profile)
+        hvn = (price_bins[max_idx] + price_bins[max_idx + 1]) / 2
+        
+        # 寻找 LVN (真空区 - 在现价附近的最小成交量区)
+        current_price = df['close'].iloc[-1]
+        # 只在当前价上下 5% 范围内寻找真空区
+        nearby_mask = (price_bins[:-1] >= current_price * 0.95) & (price_bins[1:] <= current_price * 1.05)
+        if nearby_mask.any():
+            nearby_vols = volume_profile[nearby_mask]
+            min_idx_in_mask = np.argmin(nearby_vols)
+            actual_idx = np.where(nearby_mask)[0][min_idx_in_mask]
+            lvn = (price_bins[actual_idx] + price_bins[actual_idx + 1]) / 2
+        else:
+            min_idx = np.argmin(volume_profile)
+            lvn = (price_bins[min_idx] + price_bins[min_idx + 1]) / 2
+            
+        return {"hvn": float(hvn), "lvn": float(lvn)}
+    except Exception as e:
+        logger.debug(f"VPVR 计算失败: {e}")
+        return {"hvn": None, "lvn": None}
+
+
+def _detect_smc_indicators(df: pd.DataFrame) -> dict:
+    """
+    识别 SMC (Smart Money Concepts) 指标: Order Blocks and FVG
+    """
+    obs = []
+    fvgs = []
+    
+    try:
+        if len(df) < 10:
+            return {"order_blocks": [], "fvg_gaps": []}
+            
+        # 1. 识别 FVG (Fair Value Gap)
+        for i in range(2, len(df)):
+            k1 = df.iloc[i-2]
+            k3 = df.iloc[i]
+            
+            # 看涨 FVG
+            if k3['low'] > k1['high']:
+                fvgs.append({
+                    "type": "bullish",
+                    "top": float(k3['low']),
+                    "bottom": float(k1['high']),
+                    "size_pct": float((k3['low'] - k1['high']) / k1['high'] * 100)
+                })
+            # 看跌 FVG
+            elif k3['high'] < k1['low']:
+                fvgs.append({
+                    "type": "bearish",
+                    "top": float(k1['low']),
+                    "bottom": float(k3['high']),
+                    "size_pct": float((k1['low'] - k3['high']) / k1['low'] * 100)
+                })
+        
+        # 2. 识别 Order Blocks (OB)
+        # 看涨 OB：引发强力拉升前的一根阴线
+        for i in range(1, len(df)-2):
+            k_prev = df.iloc[i]
+            k_next = df.iloc[i+1]
+            
+            body_size = abs(k_next['close'] - k_next['open'])
+            avg_body = df['close'].diff().abs().rolling(10).mean().iloc[i+1]
+            if np.isnan(avg_body): avg_body = body_size
+            
+            if k_next['close'] > k_next['open'] and body_size > avg_body * 1.5:
+                if k_prev['close'] < k_prev['open']:
+                    obs.append({
+                        "type": "bullish",
+                        "top": float(k_prev['high']),
+                        "bottom": float(k_prev['low']),
+                        "symbol": "OB+"
+                    })
+            
+            if k_next['close'] < k_next['open'] and body_size > avg_body * 1.5:
+                if k_prev['close'] > k_prev['open']:
+                    obs.append({
+                        "type": "bearish",
+                        "top": float(k_prev['high']),
+                        "bottom": float(k_prev['low']),
+                        "symbol": "OB-"
+                    })
+                    
+        return {
+            "order_blocks": obs[-3:], 
+            "fvg_gaps": fvgs[-3:]
+        }
+    except Exception as e:
+        logger.debug(f"SMC 识别失败: {e}")
+        return {"order_blocks": [], "fvg_gaps": []}
 
 
 def _analyze_whale_activity(trades: list[dict], current_price: float) -> dict:
@@ -1243,92 +1725,7 @@ def _calculate_swing_levels(df: pd.DataFrame, window: int = 20) -> dict:
         "recent_low": float(f"{recent_low:.2f}")
     }
 
-def _calculate_vpvr(df: pd.DataFrame, bins: int = 50) -> dict:
-    """
-    计算成交量分布 (VPVR) - 向量化优化版
-    """
-    if df.empty:
-        return {}
-        
-    # 1. 确定价格范围
-    min_price = df['low'].min()
-    max_price = df['high'].max()
-    if max_price <= min_price:
-        return {}
-        
-    # 2. 向量化分桶 (使用 mid price)
-    mid_prices = (df['high'] + df['low']) / 2
-    
-    # 使用 pd.cut 快速分桶
-    # labels=False 返回桶的索引(0-based)
-    # right=True (default) -> (a, b], include_lowest=True -> [min, b] for first bin
-    try:
-        df = df.copy() # Avoid SettingWithCopy warning on input df
-        df['bin_idx'] = pd.cut(mid_prices, bins=bins, include_lowest=True, labels=False)
-    except Exception as e:
-        logger.error(f"VPVR分桶计算失败: {e}")
-        return {}
-    
-    # 3. 聚合计算
-    # 按桶索引分组求和 volume
-    volume_profile = df.groupby('bin_idx')['volume'].sum()
-    
-    if volume_profile.empty:
-        return {}
-        
-    # 4. 构建结果列表
-    bin_size = (max_price - min_price) / bins
-    profile = []
-    
-    for bin_idx, volume in volume_profile.items():
-        # 计算该桶的中心价格
-        price_level = min_price + (bin_idx * bin_size) + (bin_size / 2)
-        profile.append({"price": price_level, "volume": volume})
-    
-    profile.sort(key=lambda x: x["price"])
-    
-    if not profile:
-        return {}
-        
-    # 5. 计算POC (Point of Control)
-    poc_node = max(profile, key=lambda x: x["volume"])
-    poc = poc_node["price"]
-    
-    # 6. 计算价值区域 (VAH, VAL) - 70% 成交量
-    total_volume = sum(p["volume"] for p in profile)
-    target_volume = total_volume * 0.7
-    
-    poc_idx = next(i for i, p in enumerate(profile) if p["price"] == poc)
-    
-    current_volume = poc_node["volume"]
-    up_idx = poc_idx
-    down_idx = poc_idx
-    
-    while current_volume < target_volume:
-        # 尝试向上扩展
-        next_up_vol = profile[up_idx + 1]["volume"] if up_idx + 1 < len(profile) else 0
-        # 尝试向下扩展
-        next_down_vol = profile[down_idx - 1]["volume"] if down_idx - 1 >= 0 else 0
-        
-        if next_up_vol == 0 and next_down_vol == 0:
-            break
-            
-        # 优先扩展成交量大的一侧 (更符合Auction Market Theory)
-        if next_up_vol > next_down_vol:
-            up_idx += 1
-            current_volume += next_up_vol
-        else:
-            down_idx -= 1
-            current_volume += next_down_vol
-            
-    val = profile[down_idx]["price"]
-    vah = profile[up_idx]["price"]
-    
-    return {
-        "poc": float(f"{poc:.2f}"),
-        "vah": float(f"{vah:.2f}"),
-        "val": float(f"{val:.2f}")
-    }
+
 
 
 def _detect_candlestick_patterns(df: pd.DataFrame) -> list[str]:
@@ -1552,10 +1949,10 @@ async def prepare_context_for_ai(
         trend_timeframe = "4h"
     
     # 并行获取数据任务
-    # 1. 主周期K线
-    main_kline_task = fetcher.get_klines(symbol, interval=timeframe, limit=50)
+    # 1. 主周期K线 (300根以支持更长AI上下文)
+    main_kline_task = fetcher.get_klines(symbol, interval=timeframe, limit=300)
     # 2. 趋势周期K线
-    trend_kline_task = fetcher.get_klines(symbol, interval=trend_timeframe, limit=50)
+    trend_kline_task = fetcher.get_klines(symbol, interval=trend_timeframe, limit=300)
     # 3. 基础数据
     funding_task = fetcher.get_funding_rate(symbol)
     open_interest_task = fetcher.get_open_interest(symbol)
@@ -1566,6 +1963,9 @@ async def prepare_context_for_ai(
     # 5. [新] 逐笔成交 (Whale Data)
     trades_task = fetcher.get_agg_trades(symbol, limit=1000)
 
+    # P3 优化: BTC 上下文获取加入并行任务组（山寨币时复用已有 fetcher）
+    is_altcoin = symbol not in ("BTCUSDT", "BTCUSD")
+    btc_kline_task = fetcher.get_klines("BTCUSDT", interval="4h", limit=30) if is_altcoin else None
     
     # 执行所有请求
     import aiohttp
@@ -1584,11 +1984,28 @@ async def prepare_context_for_ai(
             ls_ratio_task,                   # 4
             order_book_task,                 # 5
             trades_task,                     # 6 [New]
-            get_fear_greed_index(shared_http_session)  # 7
+            get_fear_greed_index(shared_http_session),  # 7
+            get_crypto_news(symbol, shared_http_session),  # 8 [New: 新闻]
+            fetcher.get_funding_rate_history(symbol, limit=24),  # 9 [New: 历史费率]
+            fetcher.get_token_fundamentals(symbol),         # 10 [New: 基本面]
         ]
+        # P3: 如果是山寨币，将 BTC K线任务追加到并行组
+        if btc_kline_task is not None:
+            tasks.append(btc_kline_task)     # 10 [P3: BTC 上下文]
         
         # 并发执行并捕获异常 (return_exceptions=True)
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # 并发执行并捕获异常 (return_exceptions=True)
+        # IMP-4 Fix: Add explicit timeout for data aggregation
+        # Wrap the gathered tasks in wait_for to ensure the whole batch doesn't hang indefinitely
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=20.0 # 20 seconds total timeout for all data
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Data aggregation timed out for {symbol}")
+            # Construct a list of TimeoutErrors to be handled below (mocking results)
+            results = [asyncio.TimeoutError("Batch timeout")] * len(tasks)
         
     finally:
         # 确保 Session 关闭
@@ -1611,8 +2028,9 @@ async def prepare_context_for_ai(
     # 3. 资金费率 (可选)
     funding_rate = results[2]
     if isinstance(funding_rate, Exception):
+        # P5 修复: 使用 None 而非 0.0001，避免偏多默认值误导AI
         logger.debug(f"资金费率获取失败: {funding_rate}")
-        funding_rate = 0.0001
+        funding_rate = None
         
     # 4. 持仓量 (可选)
     open_interest = results[3]
@@ -1639,9 +2057,27 @@ async def prepare_context_for_ai(
         logger.debug(f"逐笔成交获取失败: {trades}")
         trades = []
         
-    fear_greed = results[7] # Index shifted due to insertion
+    fear_greed = results[7]
     if isinstance(fear_greed, Exception):
         fear_greed = {"value": 50, "classification": "中性"}
+
+    # 9. 新闻 (可选)
+    news_headlines = results[8]
+    if isinstance(news_headlines, Exception):
+        logger.debug(f"新闻获取失败: {news_headlines}")
+        news_headlines = []
+    
+    # 10. 历史资金费率 (可选)
+    funding_history = results[9]
+    if isinstance(funding_history, Exception):
+        logger.debug(f"历史资金费率获取失败: {funding_history}")
+        funding_history = {}
+
+    # 11. 基本面数据 (可选)
+    fundamental_data = results[10]
+    if isinstance(fundamental_data, Exception):
+        logger.debug(f"基本面数据获取失败: {fundamental_data}")
+        fundamental_data = None
 
     
     # 3. 计算技术指标 (CPU密集型,放入线程池)
@@ -1662,8 +2098,8 @@ async def prepare_context_for_ai(
         # 将VPVR注入order_book上下文 (作为一种深度数据)
         order_book["vpvr"] = vpvr
     
-    # 4. 获取新闻 (暂无真实源,返回空)
-    news = []
+    # 5. 获取新闻 (真实API)
+    news = news_headlines if news_headlines else []
     
     # 5. 获取市场情绪
     sentiment = get_market_sentiment(funding_rate, ls_ratio, indicators.rsi_14)
@@ -1715,6 +2151,41 @@ K-line Summary ({len(df_main)} candles, {timeframe}):
     # 3. 计算 Swing Levels
     swing_levels = _calculate_swing_levels(df_main)
 
+    # P3 优化: 从并行结果中解析 BTC 上下文（不再单独创建 fetcher）
+    btc_context = None
+    if is_altcoin and len(results) > 11:
+        btc_klines_result = results[11]
+        if not isinstance(btc_klines_result, Exception) and btc_klines_result is not None and not btc_klines_result.empty:
+            try:
+                btc_klines = btc_klines_result
+                btc_price = btc_klines['close'].iloc[-1]
+                btc_change = (btc_klines['close'].iloc[-1] - btc_klines['open'].iloc[0]) / btc_klines['open'].iloc[0] * 100
+                btc_close = btc_klines['close']
+                btc_sma20 = btc_close.rolling(20).mean().iloc[-1] if len(btc_close) >= 20 else btc_price
+                btc_trend = "bullish" if btc_price > btc_sma20 else "bearish"
+                # 简化 RSI
+                btc_delta = btc_close.diff()
+                btc_gain = btc_delta.where(btc_delta > 0, 0).ewm(alpha=1/14, min_periods=14).mean()
+                btc_loss = (-btc_delta.where(btc_delta < 0, 0)).ewm(alpha=1/14, min_periods=14).mean()
+                btc_rsi = 50.0
+                if btc_loss.iloc[-1] != 0:
+                    btc_rs = btc_gain.iloc[-1] / btc_loss.iloc[-1]
+                    btc_rsi = 100 - (100 / (1 + btc_rs))
+                btc_context = {
+                    "price": _safe_float(btc_price),
+                    "change_pct": round(btc_change, 2),
+                    "trend": btc_trend,
+                    "rsi": round(_safe_float(btc_rsi, 50.0), 1)
+                }
+                logger.info(f"BTC 上下文注入: 价格={btc_price:.2f}, 趋势={btc_trend}, RSI={btc_rsi:.1f}")
+            except Exception as e:
+                logger.debug(f"BTC 上下文解析失败 (非关键): {e}")
+        else:
+            if isinstance(btc_klines_result, Exception):
+                logger.debug(f"BTC K线获取失败 (非关键): {btc_klines_result}")
+    else:
+        btc_context = None
+
     context = MarketContext(
         symbol=symbol,
         current_price=_safe_float(current_price),
@@ -1723,23 +2194,30 @@ K-line Summary ({len(df_main)} candles, {timeframe}):
         indicators=indicators,
         funding_rate=_safe_float(funding_rate) if funding_rate is not None else None,
         open_interest=_safe_float(open_interest) if open_interest is not None else None,
-        # 新增机构数据
+        # 机构数据
         whale_activity=whale_data,
         liquidity_gaps=gaps,
         volatility_score=_calculate_volatility_score(
             indicators, funding_rate or 0, whale_data, gaps
         ),
-        # 新增 TA S/R
+        # TA S/R
         pivot_points=pivot_points,
         swing_levels=swing_levels,
-        
+        # 新闻 + 情绪
         news_headlines=news,
         market_sentiment=sentiment,
-        timeframe=timeframe,  # 传入分析周期
+        timeframe=timeframe,
         order_book=order_book,
         trend_kline_summary=trend_kline_summary,
+        trend_klines=df_trend.assign(timestamp=df_trend['timestamp'].astype('int64') // 10**6).to_dict('records') if df_trend is not None and not df_trend.empty else None,
         trend_indicators=trend_indicators,
-        fear_greed_index=fear_greed
+        fear_greed_index=fear_greed,
+        # 新增数据源
+        long_short_ratio=ls_ratio,
+        funding_rate_history=funding_history if funding_history else None,
+        fundamental_data=fundamental_data,
+        btc_context=btc_context,
+        volume_ratio=_safe_float(indicators.volume_ratio),
     )
     
     logger.info(f"{symbol} 市场上下文聚合完成")
@@ -1785,6 +2263,295 @@ def format_context_as_text(context: MarketContext) -> str:
     lines.append(f"{'='*50}")
     
     return "\n".join(lines)
+
+
+def _convert_to_python_types(data):
+    """递归将 numpy 类型转换为 python 原生类型，并处理 NaN/Inf"""
+    import numpy as np
+    import math
+    if isinstance(data, dict):
+        return {k: _convert_to_python_types(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [_convert_to_python_types(v) for v in data]
+    elif isinstance(data, (np.int64, np.int32, np.int16, np.int8, np.uint64, np.uint32, np.uint16, np.uint8)):
+        return int(data)
+    elif isinstance(data, (np.float64, np.float32, np.float16)):
+        val = float(data)
+        return 0.0 if math.isnan(val) or math.isinf(val) else val
+    elif isinstance(data, (np.bool_, bool)):
+        return bool(data)
+    elif isinstance(data, np.ndarray):
+        return _convert_to_python_types(data.tolist())
+    elif isinstance(data, float):
+        return 0.0 if math.isnan(data) or math.isinf(data) else data
+    return data
+
+
+async def get_war_room_dashboard(symbol: str = "BTCUSDT") -> dict:
+    """
+    获取主力战情室 (War Room) 仪表盘数据
+    
+    聚合 4个核心维度:
+    1. 多周期共振 (15m, 1h, 4h, 1d)
+    2. 关键位攻防 (Pivot/Swing距离)
+    3. 资金面异动 (Whale/CVD/OrderBook)
+    4. 波动率预警 (BB Width)
+    """
+    logger.info(f"正在构建主力战情室数据 ({symbol})...")
+    
+    # 1. 归一化 Symbol
+    symbol = normalize_symbol(symbol)
+    
+    # 2. 获取全局 Fetcher
+    fetcher = await get_global_fetcher()
+    if not fetcher:
+        return None
+        
+    try:
+        # 3. 并行获取多周期数据
+        # 4h 作为主周期用于计算关键位和波动率
+        tasks = [
+            fetcher.get_klines(symbol, "15m", limit=50),  # 0
+            fetcher.get_klines(symbol, "1h", limit=50),   # 1
+            fetcher.get_klines(symbol, "4h", limit=100),  # 2 (Main)
+            fetcher.get_klines(symbol, "1d", limit=50),   # 3
+            fetcher.get_agg_trades(symbol, limit=1000),   # 4 (Whale)
+            fetcher.get_order_book(symbol),               # 5 (Depth)
+            fetcher.get_funding_rate(symbol),             # 6
+            fetcher.get_long_short_ratio(symbol),         # 7
+        ]
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 4. 解析结果
+        k_15m = results[0] if not isinstance(results[0], Exception) else None
+        k_1h = results[1] if not isinstance(results[1], Exception) else None
+        k_4h = results[2] if not isinstance(results[2], Exception) else None
+        k_1d = results[3] if not isinstance(results[3], Exception) else None
+        
+        trades = results[4] if not isinstance(results[4], Exception) else []
+        order_book = results[5] if not isinstance(results[5], Exception) else None
+        funding = results[6] if not isinstance(results[6], Exception) else None
+        ls_ratio = results[7] if not isinstance(results[7], Exception) else None
+        
+        if k_4h is None or k_4h.empty:
+            logger.error("战情室核心数据获取失败 (4h Klines)")
+            return None
+            
+        # 5. 计算技术指标 (多周期)
+        loop = asyncio.get_running_loop()
+        
+        # 定义轻量级计算任务
+        async def calc_trend(df):
+            if df is None or df.empty: return None
+            return await loop.run_in_executor(None, calculate_indicators, df)
+            
+        t_15m, t_1h, t_4h, t_1d = await asyncio.gather(
+            calc_trend(k_15m),
+            calc_trend(k_1h),
+            calc_trend(k_4h),
+            calc_trend(k_1d)
+        )
+        
+        current_price = k_4h['close'].iloc[-1]
+        
+        # 6. 构建模块数据
+        
+        # [Module 1] 多周期共振
+        trend_resonance = []
+        timelines = [("15m", t_15m), ("1h", t_1h), ("4h", t_4h), ("1d", t_1d)]
+        
+        bullish_count = 0
+        bearish_count = 0
+        
+        for tf, ind in timelines:
+            if ind:
+                status = "neutral"
+                if ind.trend_status == "bullish":
+                    status = "bullish"
+                    bullish_count += 1
+                elif ind.trend_status == "bearish":
+                    status = "bearish"
+                    bearish_count += 1
+                    
+                trend_resonance.append({
+                    "timeframe": tf,
+                    "status": status,
+                    "rsi": ind.rsi_14,
+                    "ma_aligned": ind.ma_cross_status == "金叉" or ind.sma_20 > ind.sma_50
+                })
+            else:
+                trend_resonance.append({"timeframe": tf, "status": "loading"})
+                
+        resonance_summary = "震荡"
+        if bullish_count >= 3: resonance_summary = "多头共振"
+        elif bearish_count >= 3: resonance_summary = "空头共振"
+        
+        # [Module 2] 关键位攻防
+        # 使用 4h 数据计算 Pivot 和 Swing
+        pivot_points = _calculate_pivot_points(k_4h)
+        swing_levels = _calculate_swing_levels(k_4h)
+        
+        # 寻找最近的支撑和阻力
+        supports = []
+        resistances = []
+        
+        # 提取 Pivot Levels
+        pivot_cn_map = {
+            "p": "轴心核心点", 
+            "r1": "第一阻力位 (R1)", "r2": "第二阻力位 (R2)", "r3": "第三阻力位 (R3)",
+            "s1": "第一支撑位 (S1)", "s2": "第二支撑位 (S2)", "s3": "第三支撑位 (S3)"
+        }
+        if "classic" in pivot_points:
+            p = pivot_points["classic"]
+            for k, v in p.items():
+                label = pivot_cn_map.get(k, k)
+                if v < current_price: supports.append((label, v))
+                elif v > current_price: resistances.append((label, v))
+                
+        # 提取 Swing Levels
+        if swing_levels:
+            if swing_levels.get("recent_low"): supports.append(("波段前低", swing_levels["recent_low"]))
+            if swing_levels.get("recent_high"): resistances.append(("波段前高", swing_levels["recent_high"]))
+            
+        # 排序
+        supports.sort(key=lambda x: x[1], reverse=True) # 从高到低 (最近的在前面)
+        resistances.sort(key=lambda x: x[1])            # 从低到高 (最近的在前面)
+        
+        # 默认值处理
+        default_support_label = "主要支撑位"
+        default_resistance_label = "主要阻力位"
+        
+        nearest_support = supports[0] if supports else (default_support_label, current_price * 0.9)
+        nearest_resistance = resistances[0] if resistances else (default_resistance_label, current_price * 1.1)
+        
+        safe_current_price = current_price if current_price > 0 else 1.0 # 除零保护
+        dist_support = (current_price - nearest_support[1]) / safe_current_price * 100
+        dist_resistance = (nearest_resistance[1] - current_price) / safe_current_price * 100
+        
+        key_levels = {
+            "current_price": current_price,
+            "nearest_support": {
+                "label": nearest_support[0],
+                "price": nearest_support[1],
+                "distance_pct": round(dist_support, 2)
+            },
+            "nearest_resistance": {
+                "label": nearest_resistance[0],
+                "price": nearest_resistance[1],
+                "distance_pct": round(dist_resistance, 2)
+            },
+            "in_sniper_zone": dist_support < 0.5 or dist_resistance < 0.5
+        }
+        
+        # [Module 3] 资金异动 (Smart Money)
+        whale_data = _analyze_whale_activity(trades, current_price)
+        gaps = _detect_liquidity_gaps(order_book)
+        
+        # 简单的 CVD 背离检测
+        # 如果价格上涨趋势但 CVD (net_whale) 为负 -> 诱多
+        # 如果价格下跌趋势但 CVD 为正 -> 吸筹
+        sm_signal = "neutral"
+        if t_4h:
+            # 价格趋势
+            price_trend_up = k_4h['close'].iloc[-1] > k_4h['close'].iloc[-5]
+            net_whale_buy = whale_data.get("net_whale_vol", 0) > 0
+            
+            if price_trend_up and not net_whale_buy:
+                sm_signal = "bearish_divergence" # 诱多 (价涨量缩/大户出货)
+            elif not price_trend_up and net_whale_buy:
+                sm_signal = "bullish_accumulation" # 吸筹 (价跌大户买入)
+            elif price_trend_up and net_whale_buy:
+                sm_signal = "bullish_confirmed" # 量价齐升
+            elif not price_trend_up and not net_whale_buy:
+                sm_signal = "bearish_confirmed" # 量价齐跌
+                
+        smart_money = {
+            "signal": sm_signal,
+            "whale_ratio": whale_data.get("whale_ratio", 0),
+            "net_whale_vol": whale_data.get("net_whale_vol", 0),
+            "liquidity_gaps": gaps,
+            "funding_rate": funding if funding is not None else 0,
+            "long_short_ratio": ls_ratio if ls_ratio is not None else 0
+        }
+        
+        # [Module 4] 波动率预警
+        vol_score = 0
+        bb_width = 0
+        if t_4h:
+            bb_width = t_4h.bb_width
+            vol_score = _calculate_volatility_score(t_4h, funding, whale_data, gaps)
+            
+        volatility = {
+            "score": vol_score,
+            "bb_width": bb_width,
+            "status": "storm_alert" if bb_width < 0.05 or vol_score > 70 else "calm"
+        }
+        
+        # [Module 5] 战情指南 (Final Verdict)
+        # 根据以上四个模块的数据，生成一条针对当前行情的“大白话”实战结论
+        verdict = ""
+        risk_score = 0 # 0-100倾向
+        
+        # 1. 检测共振方向
+        if resonance_summary == "多头共振":
+            verdict = "四周期多头共振，大势向好。"
+            risk_score += 20
+        elif resonance_summary == "空头共振":
+            verdict = "四周期空头共振，空方占优。"
+            risk_score -= 20
+        else:
+            verdict = "多空陷入拉锯，观望为主。"
+
+        # 2. 结合主力资金
+        if smart_money["signal"] == "bullish_accumulation":
+            verdict += "主力大单正在吸筹，关注低吸机会。"
+            risk_score += 15
+        elif smart_money["signal"] == "bearish_divergence":
+            verdict += "价格虽稳但主力正在撤离，警惕诱多反杀。"
+            risk_score -= 25
+        elif smart_money["signal"] == "bearish_confirmed":
+            verdict += "量价齐跌且主力加速出货，严禁摸底。"
+            risk_score -= 20
+        
+        # 3. 结合关键位压力
+        if key_levels["in_sniper_zone"]:
+            if dist_resistance < 0.5:
+                verdict += f" 接近{nearest_resistance[0]}，若冲高无量建议止盈或短空。"
+                risk_score -= 10
+            elif dist_support < 0.5:
+                verdict += f" 踩稳{nearest_support[0]}，是极佳的博开多点位。"
+                risk_score += 15
+
+        # 4. 结合波动率
+        if volatility["status"] == "storm_alert":
+            verdict = "⚠️ 极端收敛警告！市场恐有剧烈波动，请即刻收紧止损。"
+        
+        # 修正结论前缀
+        if not verdict: verdict = "市场数据动态生成中，请保持关注。"
+
+        result = {
+            "symbol": symbol,
+            "timestamp": datetime.now().isoformat(),
+            "trend_resonance": {
+                "summary": resonance_summary,
+                "details": trend_resonance
+            },
+            "key_levels": key_levels,
+            "smart_money": smart_money,
+            "volatility": volatility,
+            "verdict": verdict,
+            "verdict_score": risk_score
+        }
+        
+        return _convert_to_python_types(result)
+        
+    except Exception as e:
+        logger.error(f"构建战情室数据失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
 
 
 # ============================================================

@@ -125,7 +125,7 @@
 
           <!-- Center Column (Analysis & Depth) -->
           <div class="lg:col-span-8 w-full flex flex-col gap-4 min-h-[600px] lg:min-h-0 lg:overflow-y-auto custom-scroll pr-1">
-              <div class="h-auto relative rounded-2xl overflow-hidden glass-panel border border-indigo-500/20 shadow-2xl bg-slate-900/40">
+              <div class="flex-1 min-h-0 relative rounded-2xl overflow-hidden glass-panel border border-indigo-500/20 shadow-2xl bg-slate-900/40 flex flex-col">
                    <div class="absolute top-4 right-4 z-20 flex gap-2">
                        <div class="flex items-center gap-2 px-3 py-1 bg-slate-950/50 backdrop-blur rounded-lg border border-slate-800">
                            <span class="text-[10px] text-slate-500 uppercase tracking-wider font-display font-bold">基准价:</span>
@@ -157,7 +157,7 @@
                        </button>
                    </div>
 
-                   <div class="h-auto overflow-hidden flex flex-col">
+                   <div class="flex-1 overflow-hidden flex flex-col">
                        <SmartStrategyPanel 
                           class="flex-shrink-0 border-none !bg-transparent"
                           :prediction="predictionStore.prediction"
@@ -165,23 +165,18 @@
                           @scan="handleAnalyze"
                        />
 
-                       <div class="h-auto min-h-0 border-t border-slate-800/50 bg-slate-900/30 px-4 pt-4 pb-2 flex flex-col relative group">
+                       <div class="flex-1 min-h-0 border-t border-slate-800/50 bg-slate-900/30 px-4 py-4 flex flex-col relative group">
                            <div class="absolute inset-0 bg-gradient-to-b from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
-                           <div class="flex justify-between items-center mb-3 flex-shrink-0 relative z-10">
-                              <h3 class="panel-title flex items-center gap-2 font-display text-sm font-bold text-slate-300"><el-icon><MagicStick /></el-icon>今日推选</h3>
-                              <div class="flex items-center gap-2">
-                                  <span class="text-[10px] text-slate-500 bg-slate-800 px-2 py-0.5 rounded border border-slate-700 font-sans">AI 实时监控</span>
-                                  <button class="text-xs text-blue-400 hover:text-blue-300 font-display font-medium disabled:opacity-50" @click="predictionStore.runBatchScanner" :disabled="predictionStore.loading.batch">
-                                      {{ predictionStore.loading.batch ? '扫描中...' : '刷新' }}
-                                  </button>
-                              </div>
-                           </div>
-                           <SpotlightPredictions class="h-auto" @analyze="handleSpotlightAnalyze" />
+                           <WarRoomDashboard 
+                               :symbol="selectedSymbol" 
+                               @change-symbol="(s: string) => { selectedSymbol = s; }"
+                               class="z-10 relative" 
+                            />
                        </div>
                    </div>
               </div>
 
-              <div class="flex-1 min-h-[380px] flex-shrink-0 glass-panel bg-slate-800/20 border border-slate-700/50 rounded-xl overflow-hidden flex flex-col">
+              <div class="h-auto min-h-[115px] flex-shrink-0 glass-panel bg-slate-800/20 border border-slate-700/50 rounded-xl overflow-hidden flex flex-col">
                    <MarketDepth :key="marketStore.currentSymbol" class="h-full" />
               </div>
           </div>
@@ -209,7 +204,7 @@ import { ElMessage } from 'element-plus'
 
 // Components
 import MarketSnapshot from '@/components/MarketSnapshot.vue'
-import SpotlightPredictions from '@/components/SpotlightPredictions.vue'
+import WarRoomDashboard from '@/components/WarRoomDashboard.vue'
 import AnalysisControlPanel from '@/components/AnalysisControlPanel.vue'
 import RiskMonitorPanel from '@/components/RiskMonitorPanel.vue'
 import DataSourceMonitor from '@/components/DataSourceMonitor.vue'
@@ -290,18 +285,7 @@ const handleAnalyze = async () => {
     }
 }
 
-const handleSpotlightAnalyze = async (symbol: string) => {
-    const targetSymbol = symbol.includes('USDT') ? symbol : `${symbol}USDT`
-    console.log(`[Dashboard] Spotlight requested analysis for: ${targetSymbol}`)
-    
-    // 如果是切换币种，先设置好状态
-    if (selectedSymbol.value !== targetSymbol) {
-        selectedSymbol.value = targetSymbol
-    }
-    
-    // 立即执行分析
-    await handleAnalyze()
-}
+
 
 // Event Styling Helpers
 const getEventBorderClass = (type: string) => {

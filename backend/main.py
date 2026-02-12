@@ -23,7 +23,8 @@ import asyncio
 from app.api import analysis_router, market_router
 from app.api.routes import websocket as websocket_router
 from app.services.websocket_manager import manager
-from app.services.data_aggregator import BinanceDataFetcher
+from app.services.data_aggregator import BinanceDataFetcher, get_global_fetcher
+from app.core.config import settings
 
 
 # ============================================================
@@ -112,8 +113,8 @@ async def push_market_data():
             except Exception as e:
                 logger.warning(f"行情推送周期异常: {e}")
                 
-            # 每2秒推送一次 (加快频率以捕捉瞬间波动)
-            await asyncio.sleep(2)
+            # 每5秒推送一次 (B-MED-6 修复: 降低频率避免429限流)
+            await asyncio.sleep(5)
     finally:
         # 确保关闭连接
         await fetcher.close_session()
@@ -141,6 +142,11 @@ async def lifespan(app: FastAPI):
     # 启动后台推送任务
     push_task = asyncio.create_task(push_market_data())
     
+    # [优化] 初始化全局数据抓取器 Session (复用连接)
+    global_fetcher = await get_global_fetcher()
+    await global_fetcher.start_session()
+    logger.info("✅ 全局 Binance 连接池已建立")
+    
     logger.info("✅ 服务启动完成")
     logger.info("-"*50)
     
@@ -156,6 +162,13 @@ async def lifespan(app: FastAPI):
         await push_task
     except asyncio.CancelledError:
         pass
+    except asyncio.CancelledError:
+        pass
+        
+    # [优化] 关闭全局连接
+    if global_fetcher:
+        await global_fetcher.close_session()
+        logger.info("✅ 全局 Binance 连接池已关闭")
         
     logger.info("="*50)
 
@@ -194,16 +207,10 @@ app = FastAPI(
 # ============================================================
 
 # CORS跨域配置
+# CORS跨域配置
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-        "https://*.vercel.app",
-        "*"
-    ],
+    allow_origins=settings.app.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

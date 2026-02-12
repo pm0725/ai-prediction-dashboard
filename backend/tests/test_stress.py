@@ -120,10 +120,10 @@ class StressTester:
         for i in range(self.requests_per_user):
             # 轮流测试不同的接口
             endpoints = [
-                ("GET", "/api/prediction/health", None),
-                ("GET", "/api/prediction/symbols", None),
-                ("GET", "/api/prediction/context/BTCUSDT", None),
-                ("POST", "/api/prediction/predict", {"symbol": "BTCUSDT", "timeframe": "4h"}),
+                ("GET", "/api/analysis/health", None),
+                ("GET", "/api/analysis/symbols", None),
+                ("GET", "/api/analysis/context/BTCUSDT", None),
+                ("POST", "/api/analysis/predict", {"symbol": "BTCUSDT", "timeframe": "4h"}),
             ]
             
             method, endpoint, data = endpoints[i % len(endpoints)]
@@ -298,11 +298,11 @@ async def run_endpoint_benchmark(base_url: str):
     print(f"{'='*60}\n")
     
     endpoints = [
-        ("GET", "/api/prediction/health", None, "健康检查"),
-        ("GET", "/api/prediction/symbols", None, "交易对列表"),
-        ("GET", "/api/prediction/context/BTCUSDT", None, "市场上下文"),
-        ("POST", "/api/prediction/predict", {"symbol": "BTCUSDT", "timeframe": "4h"}, "AI预测"),
-        ("POST", "/api/prediction/strategy/generate", {
+        ("GET", "/api/analysis/health", None, "健康检查"),
+        ("GET", "/api/analysis/symbols", None, "交易对列表"),
+        ("GET", "/api/analysis/context/BTCUSDT", None, "市场上下文"),
+        ("POST", "/api/analysis/predict", {"symbol": "BTCUSDT", "timeframe": "4h"}, "AI预测"),
+        ("POST", "/api/analysis/strategy/generate", {
             "symbol": "BTCUSDT",
             "prediction": "看涨",
             "confidence": 75,

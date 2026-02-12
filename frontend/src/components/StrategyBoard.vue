@@ -141,19 +141,61 @@
             <div 
               v-for="tp in strategy.take_profit" 
               :key="tp.level"
-              class="bg-emerald-500/5 p-3 rounded-lg border border-emerald-500/10 flex justify-between items-center group hover:bg-emerald-500/15 hover:border-emerald-500/30 hover:shadow-[0_0_15px_rgba(16,185,129,0.1)] transition-all cursor-default"
+              class="bg-emerald-500/5 p-3 rounded-lg border border-emerald-500/10 flex justify-between items-center group hover:bg-emerald-500/15 hover:border-emerald-500/30 hover:shadow-[0_0_15px_rgba(16,185,129,0.1)] transition-all cursor-default relative overflow-hidden"
             >
-              <div>
-                <div class="text-[10px] text-emerald-500 font-bold uppercase">TP{{ tp.level }}</div>
+              <!-- Glass Shine for TP1 -->
+              <div v-if="tp.level === 1" class="absolute inset-0 bg-gradient-to-r from-emerald-500/10 to-transparent pointer-events-none"></div>
+              
+              <div class="relative z-10">
+                <div class="flex items-center gap-1.5">
+                    <div class="text-[10px] text-emerald-500 font-bold uppercase">TP{{ tp.level }}</div>
+                    <span v-if="tp.level === 1" class="text-[9px] px-1 bg-emerald-500/20 text-emerald-400 rounded leading-none py-0.5 border border-emerald-500/30">1:1 保本位</span>
+                </div>
                 <div class="font-mono font-bold text-white tracking-widest">{{ formatPrice(tp.price) }}</div>
               </div>
-              <div class="text-[10px] font-mono text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+              <div class="text-[10px] font-mono text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 relative z-10">
                 平{{ tp.close_percentage }}%
               </div>
             </div>
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- SMC & VPVR 深度情报 (New Section) -->
+    <div v-if="strategy.pro_context" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="glass-panel p-4 rounded-xl border border-blue-500/10 bg-blue-500/5">
+            <div class="flex items-center gap-2 mb-3">
+                <el-icon class="text-blue-400"><Compass /></el-icon>
+                <span class="text-[11px] font-bold text-blue-300 uppercase tracking-wider">SMC 机构订单块 (Order Blocks)</span>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <div v-for="(ob, i) in strategy.pro_context.order_blocks" :key="i"
+                     class="text-[10px] px-2 py-1 rounded bg-slate-800 border border-slate-700 text-slate-300 flex items-center gap-1.5"
+                >
+                    <span :class="ob.type === 'bullish' ? 'text-emerald-400' : 'text-rose-400'">{{ ob.type === 'bullish' ? '▲' : '▼' }} {{ ob.symbol }}</span>
+                    <span class="text-slate-500">@</span>
+                    <span class="font-mono">{{ formatPrice(ob.bottom) }}-{{ formatPrice(ob.top) }}</span>
+                </div>
+                <div v-if="!strategy.pro_context.order_blocks?.length" class="text-[10px] text-slate-500 italic">暂无活跃机构订单块</div>
+            </div>
+        </div>
+        <div class="glass-panel p-4 rounded-xl border border-purple-500/10 bg-purple-500/5">
+            <div class="flex items-center gap-2 mb-3">
+                <el-icon class="text-purple-400"><Orange /></el-icon>
+                <span class="text-[11px] font-bold text-purple-300 uppercase tracking-wider">价格分布 (VPVR Context)</span>
+            </div>
+            <div class="flex flex-col gap-2">
+                <div class="flex justify-between items-center">
+                    <span class="text-[10px] text-slate-400">成交密集区 (POC)</span>
+                    <span class="text-[10px] font-mono text-white">{{ formatPrice(strategy.pro_context.vp_hvn) || '-' }}</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-[10px] text-slate-400">止损真空位 (LVN)</span>
+                    <span class="text-[10px] font-mono text-purple-400">{{ formatPrice(strategy.pro_context.vp_lvn) || '-' }}</span>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- 逻辑与摘要 -->
@@ -217,7 +259,9 @@ import {
   Warning,
   Check,
   DocumentCopy,
-  QuestionFilled
+  QuestionFilled,
+  Compass,
+  Orange
 } from '@element-plus/icons-vue'
 import { formatPrice, formatTime } from '@/utils/formatters'
 

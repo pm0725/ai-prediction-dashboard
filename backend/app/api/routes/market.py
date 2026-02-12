@@ -1,9 +1,13 @@
 from fastapi import APIRouter, HTTPException, Query
-from app.services.data_aggregator import BinanceDataFetcher, BINANCE_AVAILABLE, get_global_market_stats
+from app.services.data_aggregator import BinanceDataFetcher, BINANCE_AVAILABLE, get_global_market_stats, get_war_room_dashboard
 import os
 from typing import List, Dict, Any
 
 router = APIRouter()
+
+@router.get("/ping")
+async def ping():
+    return {"message": "pong"}
 
 @router.get("/tickers", response_model=List[Dict[str, Any]])
 async def get_tickers(symbols: str = Query(..., description="逗号分隔的交易对列表，例如: BTCUSDT,ETHUSDT")):
@@ -68,3 +72,22 @@ async def get_market_depth(symbol: str = Query(..., description="交易对，如
     finally:
         await fetcher.close_session()
 
+
+@router.get("/war-room/{symbol}")
+async def get_war_room(symbol: str):
+    """
+    获取主力战情室数据 (Major Pair War Room)
+    
+    聚合多周期趋势、关键位攻防、资金异动和波动率预警。
+    专门针对 BTC/ETH 等主力币种优化。
+    """
+    try:
+        data = await get_war_room_dashboard(symbol)
+        if not data:
+            raise HTTPException(status_code=404, detail=f"No data found for {symbol}")
+        return data
+    except Exception as e:
+        # log error details
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))

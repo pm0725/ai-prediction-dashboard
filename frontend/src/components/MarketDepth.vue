@@ -18,11 +18,10 @@
     </template>
 
     <div class="depth-content" v-if="orderBook && orderBook.major_support">
-      <!-- 1. 多空力量对比 (仪表盘) -->
-      <div class="ratio-section">
-        <div class="ratio-label">
-          <span>买盘 (Bids)</span>
-          <span>卖盘 (Asks)</span>
+      <div class="ratio-section border-r border-slate-700/50 pr-4 mr-4">
+        <div class="ratio-label text-[10px]">
+          <span>买 (Bids)</span>
+          <span>卖 (Asks)</span>
         </div>
         <el-progress 
           :percentage="bidPercentage" 
@@ -42,7 +41,7 @@
       </div>
 
       <!-- 2. 主力买卖墙 -->
-      <div class="walls-section">
+      <div class="walls-section flex-1">
         <!-- 阻力墙 (卖) -->
         <div class="wall-item resistance">
           <div class="wall-header">
@@ -75,9 +74,10 @@
       </div>
       
       <!-- 说明 -->
+      <!-- 说明 -->
       <div class="depth-footer">
         <el-icon><InfoFilled /></el-icon>
-        <span>基于 Binance 实时 20 档盘口计算</span>
+        <span>实时深度</span>
       </div>
     </div>
     
@@ -174,7 +174,8 @@ watch(() => marketStore.currentSymbol, () => {
   backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 12px;
-  min-height: 380px;
+  border-radius: 12px;
+  min-height: 115px;
   display: flex;
   flex-direction: column;
   
@@ -183,7 +184,7 @@ watch(() => marketStore.currentSymbol, () => {
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   }
   :deep(.el-card__body) {
-    padding: 12px 16px;
+    padding: 6px 12px;
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -206,53 +207,59 @@ watch(() => marketStore.currentSymbol, () => {
 }
 
 .depth-content {
-  padding: 16px 0;
+  padding: 0;
   flex: 1;
   display: flex;
-  flex-direction: column;
-  justify-content: space-between;
+  flex-direction: row; /* 水平排列 */
+  align-items: center;
 }
 
 .ratio-section {
-  margin-bottom: 24px;
+  margin-bottom: 0;
+  width: 35%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   
   .ratio-label {
     display: flex;
     justify-content: space-between;
-    font-size: 14px;
+    font-size: 10px;
     color: rgba(255, 255, 255, 0.6);
-    margin-bottom: 6px;
+    margin-bottom: 4px;
   }
   
   .ratio-bar {
     :deep(.el-progress-bar__outer) {
-      background-color: #ef4444; // 卖盘背景 (右侧)
-      border-radius: 4px;
+      background-color: #ef4444; 
+      border-radius: 2px;
+      height: 6px !important;
     }
     :deep(.el-progress-bar__inner) {
-      background-color: #10b981; // 买盘 (左侧)
-      border-radius: 4px;
+      background-color: #10b981; 
+      border-radius: 2px;
     }
   }
   
   .ratio-values {
     display: flex;
     justify-content: space-between;
-    margin-top: 6px;
-    font-size: 15px;
+    margin-top: 4px;
+    font-size: 11px;
     font-weight: 600;
     
     .bid-vol { color: #10b981; }
     .ask-vol { color: #ef4444; }
-    .ratio-text { font-size: 13px; color: rgba(255, 255, 255, 0.4); font-weight: 400; }
+    .ratio-text { font-size: 9px; color: rgba(255, 255, 255, 0.4); font-weight: 400; }
   }
 }
 
 .walls-section {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 4px;
+  margin-bottom: 0;
+  justify-content: center;
 }
 
 .wall-item {
@@ -278,7 +285,7 @@ watch(() => marketStore.currentSymbol, () => {
   
   .wall-bar-container {
     position: relative;
-    height: 24px;
+    height: 16px; /* Thinner bars */
     background: rgba(255, 255, 255, 0.05);
     border-radius: 4px;
     overflow: hidden;
@@ -309,7 +316,7 @@ watch(() => marketStore.currentSymbol, () => {
   gap: 6px;
   font-size: 13px;
   color: rgba(255, 255, 255, 0.3);
-  margin-top: 12px;
+  margin-top: 4px;
 }
 
 .loading-placeholder {

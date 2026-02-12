@@ -137,8 +137,8 @@
                 </div>
                 <div>
                    <div class="text-xs text-slate-500 font-bold uppercase tracking-wider mb-1 font-display">波动风险</div>
-                   <div class="text-xl font-display font-bold leading-none" :class="prediction.risk_level === '低' ? 'text-emerald-400' : (prediction.risk_level === '中' ? 'text-amber-400' : 'text-rose-400')">
-                      {{ prediction.risk_level }}
+                   <div class="text-xl font-display font-bold leading-none" :class="riskLevelColor">
+                      {{ localizedRiskLevel }}
                    </div>
                 </div>
             </div>
@@ -156,7 +156,8 @@ const props = defineProps(['prediction', 'currentPrice'])
 
 // Computed Helpers
 const isBullish = computed(() => {
-    return props.prediction.prediction_cn?.includes('涨') || props.prediction.prediction?.includes('Bullish')
+    const pred = props.prediction.prediction_cn || props.prediction.prediction || ''
+    return pred.includes('涨') || pred.toLowerCase().includes('bullish')
 })
 
 const pnlPercentage = computed(() => {
@@ -239,7 +240,23 @@ const estimatedDuration = computed(() => {
         '1d': '2d - 5d',
         '1w': '1w - 3w'
     }
-    return map[tf.toLowerCase()] || 'Intraday'
+    return map[tf.toLowerCase()] || '日内'
+})
+
+// 风险等级中英文映射
+const riskLevelMap: Record<string, string> = {
+  'low': '低', 'medium': '中', 'high': '高', 'extreme': '极高',
+  '低': '低', '中': '中', '高': '高', '极高': '极高'
+}
+const localizedRiskLevel = computed(() => {
+  const level = props.prediction.risk_level || '中'
+  return riskLevelMap[level.toLowerCase()] || level
+})
+const riskLevelColor = computed(() => {
+  const lv = localizedRiskLevel.value
+  if (lv === '低') return 'text-emerald-400'
+  if (lv === '中') return 'text-amber-400'
+  return 'text-rose-400'
 })
 </script>
 

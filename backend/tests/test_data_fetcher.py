@@ -189,16 +189,13 @@ class TestBinanceExchange:
             mock_request.assert_called_once()
     
     @pytest.mark.asyncio
-    async def test_get_klines_fallback_to_mock(self, exchange):
-        """测试API失败时返回模拟数据"""
+    async def test_get_klines_raises_exception(self, exchange):
+        """测试API失败时抛出异常"""
         with patch.object(exchange, '_request', new_callable=AsyncMock) as mock_request:
             mock_request.side_effect = Exception("API Error")
             
-            klines = await exchange.get_klines("BTCUSDT", "4h", limit=10)
-            
-            # 应该返回模拟数据而不是抛出异常
-            assert len(klines) > 0
-            assert isinstance(klines[0], Kline)
+            with pytest.raises(Exception, match="API请求失败"):
+                await exchange.get_klines("BTCUSDT", "4h", limit=10)
     
     @pytest.mark.asyncio
     async def test_get_ticker_success(self, exchange):

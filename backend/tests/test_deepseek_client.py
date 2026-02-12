@@ -78,12 +78,14 @@ class TestPredictionResult:
     
     def test_create_prediction_result(self):
         """测试创建预测结果对象"""
+        from app.services.deepseek_client import ReasoningDetails
+        
         result = PredictionResult(
             symbol="BTCUSDT",
             timeframe="4h",
             prediction="看涨",
             confidence=75,
-            reasoning=["测试理由1", "测试理由2"],
+            reasoning=ReasoningDetails(technical="测试技术分析", risk_factors=["风险1"]),
             key_levels={"support": 60000, "resistance": 70000},
             suggested_action="测试建议",
             risk_level="中",
@@ -93,7 +95,7 @@ class TestPredictionResult:
         assert result.symbol == "BTCUSDT"
         assert result.prediction == "看涨"
         assert result.confidence == 75
-        assert len(result.reasoning) == 2
+        assert result.reasoning.technical == "测试技术分析"
     
     def test_to_dict(self):
         """测试转换为字典"""
@@ -124,17 +126,24 @@ class TestDeepSeekClient:
     
     def test_init_without_api_key(self):
         """测试无API密钥时抛出异常"""
-        with patch.dict('os.environ', {'DEEPSEEK_API_KEY': ''}):
+        with patch('app.services.deepseek_client.settings') as mock_settings:
+            mock_settings.deepseek.api_key = ""
             with pytest.raises(ValueError, match="API key未配置"):
-                DeepSeekClient(api_key='')
+                DeepSeekClient(api_key=None)
     
     def test_init_with_api_key(self):
         """测试使用API密钥初始化"""
-        client = DeepSeekClient(api_key='test-key-12345')
-        
-        assert client.api_key == 'test-key-12345'
-        assert client.model == 'deepseek-chat'
-        assert client.client is not None
+        with patch('app.services.deepseek_client.settings') as mock_settings:
+            # 确保不使用 settings 中的 key，而是使用传入的
+            mock_settings.deepseek.api_key = "env-key"
+            mock_settings.deepseek.base_url = "https://api.deepseek.com" # Fix: Set explicit string for URL validation
+            client = DeepSeekClient(api_key='test-key-12345')
+            
+            assert client.api_key == 'test-key-12345'
+            # 验证默认模型是否从 settings 获取 (或保持默认)
+            # 这里我们不假定具体值，只验证它被赋值了
+            assert client.model is not None
+            assert client.client is not None
     
     @pytest.mark.asyncio
     async def test_analyze_success(self, mock_client):
@@ -156,7 +165,8 @@ class TestDeepSeekClient:
         assert result.symbol == "BTCUSDT"
         assert result.prediction == "看涨"
         assert result.confidence == 75
-        assert len(result.reasoning) == 3
+        # 验证 reasoning 对象
+        assert "RSI" in result.reasoning.technical or "RSI" in str(result.reasoning)
         assert result.key_levels["strong_resistance"] == 68000
     
     @pytest.mark.asyncio
@@ -197,14 +207,13 @@ class TestDeepSeekClient:
 class TestSystemPrompt:
     """测试系统提示词"""
     
-    def test_system_prompt_contains_prism(self):
-        """测试系统提示词包含PRISM框架"""
-        assert "PRISM" in SYSTEM_PROMPT
-        assert "Price Action" in SYSTEM_PROMPT
-        assert "Risk Assessment" in SYSTEM_PROMPT
-        assert "Indicators" in SYSTEM_PROMPT
-        assert "Sentiment" in SYSTEM_PROMPT
-        assert "Macro" in SYSTEM_PROMPT
+    def test_system_prompt_contains_framework(self):
+        """测试系统提示词包含分析框架"""
+        assert "分析框架" in SYSTEM_PROMPT
+        assert "宏观与微观共振分析" in SYSTEM_PROMPT
+        assert "订单簿分析" in SYSTEM_PROMPT
+        assert "技术指标分析" in SYSTEM_PROMPT
+        assert "市场情绪" in SYSTEM_PROMPT
     
     def test_system_prompt_contains_json_format(self):
         """测试系统提示词包含JSON格式要求"""

@@ -103,6 +103,7 @@ async def predict(
     """
     symbol = request.symbol.upper()
     timeframe = request.timeframe
+    
     logger.info(f"收到分析请求: {symbol} (use_cache={use_cache}) | Model: {request.model}")
     
     try:
@@ -146,28 +147,30 @@ async def predict(
         # 4. 注入透传数据
         # Pydantic v1/v2 compatibility
         result_dict = result.model_dump() if hasattr(result, 'model_dump') else result.dict()
-        context_dict = context.to_dict()
+        raw_context_dict = context.to_dict()
         
-        if "trend_context" in context_dict:
-            result_dict["trend_context"] = context_dict["trend_context"]
-        if "order_book" in context_dict:
-            result_dict["order_book_context"] = context_dict["order_book"]
+        if "trend_context" in raw_context_dict:
+            result_dict["trend_context"] = raw_context_dict["trend_context"]
+        if "order_book" in raw_context_dict:
+            result_dict["order_book_context"] = raw_context_dict["order_book"]
             
-        # [新增] 注入链上数据
+        # 注入链上数据
         on_chain_data = {
-            "whale_activity": context_dict.get("whale_activity"),
-            "liquidity_gaps": context_dict.get("liquidity_gaps"),
-            "volatility_score": context_dict.get("volatility_score")
+            "whale_activity": raw_context_dict.get("whale_activity"),
+            "liquidity_gaps": raw_context_dict.get("liquidity_gaps"),
+            "volatility_score": raw_context_dict.get("volatility_score")
         }
         # 只要有任意一项非空，就注入
         if any(v is not None for v in on_chain_data.values()):
             result_dict["on_chain_context"] = on_chain_data
         
         # 5. 存入缓存
+        # 强制刷新时间戳，确保前端认为是最新的
+        result_dict["analysis_time"] = datetime.now().isoformat()
+        
         cache.cache_analysis(symbol, timeframe, result_dict)
         
-        logger.info(f"分析完成: {symbol} -> {result.prediction}")
-        
+        logger.info(f"分析完成: {symbol} -> {result.prediction} | Time: {result_dict['analysis_time']}")
         return AnalysisResult(**result_dict)
         
     except ValueError as e:
@@ -293,18 +296,7 @@ async def get_context(symbol: str):
             "current_price": context.current_price,
             "klines": context.klines,  # 新增
             "kline_summary": context.kline_summary,
-            "indicators": {
-                "rsi_14": context.indicators.rsi_14,
-                "macd_line": context.indicators.macd_line,
-                "macd_signal": context.indicators.macd_signal,
-                "macd_histogram": context.indicators.macd_histogram,
-                "sma_20": context.indicators.sma_20,
-                "sma_50": context.indicators.sma_50,
-                "bb_upper": context.indicators.bb_upper,
-                "bb_lower": context.indicators.bb_lower,
-                "trend_status": context.indicators.trend_status,
-                "ma_cross_status": context.indicators.ma_cross_status
-            },
+            "indicators": context.indicators.to_dict(), # 使用统一的 to_dict (包含 SMC/VPVR)
             "funding_rate": context.funding_rate,
             "open_interest": context.open_interest,
             "volatility_score": context.volatility_score,

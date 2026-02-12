@@ -139,35 +139,24 @@ class BatchAnalyzer:
                 raise
             
             # 2. 调用AI分析 (使用统一的 DeepSeekAnalyst)
+            # 2. 调用AI分析 (使用统一的 DeepSeekAnalyst)
             try:
-                # 引入指数避让重试逻辑
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        analyst = get_analyst()
-                        
-                        # 注入用户偏好 (关键补丁: 对齐 predict 端的逻辑)
-                        context_dict = context.to_dict()
-                        context_dict["user_preferences"] = {
-                            "depth": 2, # Batch 默认 standard
-                            "risk": "moderate",
-                            "model": model,
-                            "prompt_template": prompt_template
-                        }
+                analyst = get_analyst()
+                
+                # 注入用户偏好 (关键补丁: 对齐 predict 端的逻辑)
+                context_dict = context.to_dict()
+                context_dict["user_preferences"] = {
+                    "depth": 2, # Batch 默认 standard
+                    "risk": "moderate",
+                    "model": model,
+                    "prompt_template": prompt_template
+                }
 
-                        result = await asyncio.wait_for(
-                            analyst.analyze_market(symbol, context_dict),
-                            timeout=self.timeout_seconds
-                        )
-                        break # 成功则退出重试循环
-                    except (Exception) as e:
-                        if "429" in str(e) or "rate limit" in str(e).lower():
-                            wait_time = (attempt + 1) * 2
-                            logger.warning(f"触发速率限制 {symbol}, 等待 {wait_time}s 后重试 ({attempt+1}/{max_retries})")
-                            await asyncio.sleep(wait_time)
-                            if attempt == max_retries - 1: raise
-                        else:
-                            raise # 其他非限流错误直接抛出
+                # MED-3 Fix: Removed redundant retry loop, rely on DeepSeekAnalyst's internal @retry
+                result = await asyncio.wait_for(
+                    analyst.analyze_market(symbol, context_dict),
+                    timeout=self.timeout_seconds
+                )
                 
                 # 3. 注入透传数据
                 result_dict = result.model_dump() if hasattr(result, 'model_dump') else result.dict() # CRIT-4 修复: Pydantic v1/v2 兼容
@@ -229,31 +218,31 @@ class BatchAnalyzer:
                     trend = indicators.trend_status  # "up", "down", "sideways"
                     rsi = indicators.rsi_14
                     
-                    direction = "Neutral"
+                    direction = "震荡"
                     if trend == "up":
-                        direction = "Bullish"
+                        direction = "看涨"
                     elif trend == "down":
-                        direction = "Bearish"
+                        direction = "看跌"
                     
                     # 修正方向 (RSI超买超卖)
-                    if rsi > 75 and direction == "Bullish":
-                        direction = "Neutral" # 潜在回调
-                    elif rsi < 25 and direction == "Bearish":
-                        direction = "Neutral" # 潜在反弹
+                    if rsi > 75 and direction == "看涨":
+                        direction = "震荡" # 潜在回调
+                    elif rsi < 25 and direction == "看跌":
+                        direction = "震荡" # 潜在反弹
                         
                     fallback_result = {
                         "symbol": symbol,
                         "timeframe": timeframe,
                         "prediction": direction,
-                        "prediction_cn": "看涨" if direction == "Bullish" else ("看跌" if direction == "Bearish" else "震荡"),
+                        "prediction_cn": direction,
                         "confidence": 60, # 降级结果置信度较低
-                        "reasoning": [f"AI响应超时，基于技术指标分析: 趋势{trend}, RSI {rsi:.1f}"],  # MED-3 修复: 必须是列表
+                        "reasoning": [f"AI响应超时，基于技术指标分析: 趋势{trend}, RSI {rsi:.1f}"],
                         "key_levels": {
                             "supports": [context.current_price * 0.95],
                             "resistances": [context.current_price * 1.05],
                             "current_price": context.current_price
                         },
-                        "risk_level": "medium",
+                        "risk_level": "中",
                         "summary": f"当前呈现{trend}趋势，技术指标显示{direction}信号 (自动降级模式)",
                         "entry_zone": None,
                         "stop_loss": None,
@@ -341,8 +330,21 @@ class BatchAnalyzer:
             for i, symbol in enumerate(symbols)
         ]
         
-        # 并发执行
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # H-4 修复: 全局超时保护，防止整批分析挂起超过前端 600s 超时
+        # 全局超时 = 500s (低于前端 600s 限制)
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=500.0
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"批量分析全局超时 (>500s)，将已完成的任务返回")
+            # 取消所有尚未完成的任务
+            for task in tasks:
+                if hasattr(task, 'cancel'):
+                    task.cancel()
+            # 返回已有结果的占位
+            results = [asyncio.TimeoutError("全局批量超时")] * len(symbols)
         
         # 处理结果
         analysis_results = []

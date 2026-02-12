@@ -11,6 +11,7 @@ from datetime import datetime
 import math
 
 from .data_fetcher import Kline, Ticker, FundingRate
+from app.models.indicators import TechnicalIndicators
 
 logger = logging.getLogger(__name__)
 
@@ -19,56 +20,7 @@ logger = logging.getLogger(__name__)
 # 数据模型
 # ============================================================
 
-@dataclass
-class TechnicalIndicators:
-    """技术指标结果"""
-    # 移动平均线
-    sma_20: float = 0.0
-    sma_50: float = 0.0
-    ema_12: float = 0.0
-    ema_26: float = 0.0
-    
-    # RSI
-    rsi_14: float = 50.0
-    
-    # MACD
-    macd_line: float = 0.0
-    macd_signal: float = 0.0
-    macd_histogram: float = 0.0
-    
-    # 布林带
-    bb_upper: float = 0.0
-    bb_middle: float = 0.0
-    bb_lower: float = 0.0
-    bb_width: float = 0.0
-    
-    # ATR
-    atr_14: float = 0.0
-    
-    # 额外分析
-    trend_status: str = "neutral"  # bullish/bearish/neutral
-    ma_cross_status: str = "无交叉"
-    volatility_level: str = "中等"
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "sma_20": round(self.sma_20, 4),
-            "sma_50": round(self.sma_50, 4),
-            "ema_12": round(self.ema_12, 4),
-            "ema_26": round(self.ema_26, 4),
-            "rsi_14": round(self.rsi_14, 2),
-            "macd_line": round(self.macd_line, 6),
-            "macd_signal": round(self.macd_signal, 6),
-            "macd_histogram": round(self.macd_histogram, 6),
-            "bb_upper": round(self.bb_upper, 4),
-            "bb_middle": round(self.bb_middle, 4),
-            "bb_lower": round(self.bb_lower, 4),
-            "bb_width": round(self.bb_width, 4),
-            "atr_14": round(self.atr_14, 4),
-            "trend_status": self.trend_status,
-            "ma_cross_status": self.ma_cross_status,
-            "volatility_level": self.volatility_level
-        }
+
 
 
 @dataclass
@@ -171,7 +123,7 @@ class TechnicalAnalyzer:
     ) -> Tuple[float, float, float]:
         """计算MACD"""
         if len(prices) < slow:
-            return 0, 0, 0
+            return 0.0, 0.0, 0.0
         
         ema_fast = TechnicalAnalyzer.calculate_ema(prices, fast)
         ema_slow = TechnicalAnalyzer.calculate_ema(prices, slow)

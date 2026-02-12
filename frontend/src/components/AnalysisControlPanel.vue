@@ -598,6 +598,26 @@ const signalMode = ref('display')
 const selectedModel = ref('deepseek-chat')
 const promptTemplate = ref(`你是一个专业的加密货币量化分析师...`)
 
+// FIX: Auto-sync props to internal refs
+watch(() => props.symbol, (val) => { if (val) selectedSymbol.value = val })
+watch(() => props.timeframe, (val) => { if (val) selectedTimeframe.value = val })
+watch(() => props.depth, (val) => { if (val) analysisDepth.value = val })
+watch(() => props.risk, (val) => { if (val !== undefined) riskPreference.value = val })
+
+// Notify parent on changes
+watch(selectedSymbol, (val) => emit('update:symbol', val))
+watch(selectedTimeframe, (val) => emit('update:timeframe', val))
+watch(analysisDepth, (val) => emit('update:depth', val))
+watch(riskPreference, (val) => emit('update:risk', val))
+
+// FIX: Auto-sync model and prompt template to Store
+watch([selectedModel, promptTemplate], ([newModel, newPrompt]) => {
+    predictionStore.updatePreferences({
+        model: newModel,
+        promptTemplate: newPrompt
+    })
+})
+
 // ============================================================
 // 计算属性
 // ============================================================
@@ -716,7 +736,9 @@ const handleManualSave = () => {
   predictionStore.updatePreferences({
     timeframe: selectedTimeframe.value,
     depth: analysisDepth.value,
-    risk: Number(riskPreference.value)
+    risk: Number(riskPreference.value),
+    model: selectedModel.value,
+    promptTemplate: promptTemplate.value
   })
   
   // 同时保存本地组件状态 (Legacy)
@@ -789,6 +811,8 @@ const loadFromLocalStorage = () => {
       if (saved) {
         const config = JSON.parse(saved)
         if (config.symbol) selectedSymbol.value = config.symbol
+        if (config.model) selectedModel.value = config.model // Restore model
+        if (config.promptTemplate) promptTemplate.value = config.promptTemplate // Restore prompt
         
         // Skip core params to respect parent props (Store is the source of truth)
         /*

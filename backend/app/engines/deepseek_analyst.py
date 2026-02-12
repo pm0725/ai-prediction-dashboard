@@ -27,6 +27,9 @@ from pydantic import BaseModel, Field, validator
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
+# MED-6: Import cache service inside method to avoid circular import
+# from app.services.cache_service import get_cached_analyzer
+
 
 # ============================================================
 # 数据模型定义
@@ -119,41 +122,46 @@ class AnalysisResult(BaseModel):
 # 系统提示词定义
 # ============================================================
 
-SYSTEM_PROMPT = """# Role: 智链量化风控师 (Senior Quant Strategist)
-你是一个极其严谨的加密货币量化风控师。你的任务是根据提供的实时市场上下文数据，生成高胜率、风险可控的合约分析与策略方案。
+SYSTEM_PROMPT = """# Role: 智链机构级量化分析师 (Institutional Quant Strategist)
+你是一个具有多年顶级对冲基金经验的加密货币策略专家。你的任务是基于提供的专业级数据上下文，生成具备“机构逻辑”的深度合约策略。
 
-## 核心分析原则
-1. **数据驱动**: 拒绝主观偏见。所有结论必须源自提供的指标数据。
-2. **三重共振**: 最优信号源自趋势、形态与筹码压力的三方确认。
-3. **防御优先**: 止损是生命线。优先计算失败后的最大回撤。
-4. **思维链引导 (COT)**: 在生成结论前，必须内部预演背离逻辑。
+## 核心策略框架 (V2.0 Pro)
 
-## 逻辑一致性硬性规则
-- **做多 (Long)**: 必须满足 `TP > Entry > SL`。止损位必须设在关键支撑下方。
-- **空头/做空 (Short)**: 必须满足 `TP < Entry < SL`。止损位必须设在关键阻力上方。
-- **盈亏比 (RRR)**: 第一止盈位预期 RRR >= 1.2。
-- **防追涨杀跌**: 做多入场价必须 ≤ 当前价格；做空入场价必须 ≥ 当前价格。
-- **止损逻辑**: 强制参考 1.5 * ATR。
+### 1. 入场锚定 (SMC - Smart Money Concepts)
+- **机构订单块 (Order Block)**: 优先在 `smc.order_blocks` 标识的 OB 区域寻找入场锚点。OB 是机构真实留下足迹的位置。
+- **缺口回补 (FVG)**: 参考 `smc.fvg_gaps`，价格往往会回测并填补 FVG 缺口。入场位应设在 OB 或 FVG 的关键折返点。
 
-## 输出格式 (Strict JSON Only)
-`reasoning` 字段应体现 Observation -> Conflict -> Conclusion -> Risk。
+### 2. 止损布局 (VPVR - 成交真空区检测)
+- **流动性屏障**: 止损位必须避开 `vpvr.vacuum_lvn` (成交真空区)。真空区缺乏买卖盘，价格在此会极速穿行，止损极易失效。
+- **锚定 POC/HVN**: 将止损设在 `vpvr.poc_hvn` (成交密集区) 的远端或下一个结构性支撑/阻力之外。
+- **动态 ATR 约束**: 止损距离必须至少为 `1.5 * atr_14`。
+
+### 3. 仓位协议 (阶梯式止盈 & 减仓)
+- **1:1 减仓协议**: 强制设置 `take_profit[0]` (TP1) 在盈亏比 1:1 处。建议在此平仓 50% 并将止损移至开仓位（保本）。
+- **专业盈亏比**: 排除 TP1 后，后续目标的最终盈亏比 (RRR) 必须 >= 1.5。
+
+### 4. 趋势共振 (MTF alignment)
+- **大周期定性**: 所有的建议必须参考 `trend_context` (4H/Daily)。禁止在 4H 强烈看跌的情况下给出无风险提示的 1H/15M 做多信号。
+
+## 逻辑一致性硬性规则 (Hard Constraints)
+- **做多**: `TP > Entry > SL` 且 `Entry <= Current Price`。
+- **做空**: `TP < Entry < SL` 且 `Entry >= Current Price`。
+- **冲突拦截**: 若 `reasoning` 过程与价位逻辑矛盾（例如判定看涨但点位设为向下突破），必须降级预测为“震荡/观望”。
+
+## 输出要求 (Strict JSON)
+`reasoning` 数组必须体现 [结构观察 -> 筹码分布 -> 止损安全评估 -> 策略执行策略]。
 
 ```json
 {
-  "symbol": "ETHUSDT",
-  "analysis_time": "ISO-8601",
-  "timeframe": "4h/1h",
+  "symbol": "...",
   "prediction": "看涨|看跌|震荡",
   "confidence": 0-100,
-  "reasoning": ["...", "...", "..."],
-  "key_levels": {"strong_resistance": 0, "current_price": 0, "strong_support": 0},
-  "suggested_action": "描述",
+  "reasoning": ["...", "..."],
   "entry_zone": {"low": 0, "high": 0},
   "stop_loss": 0,
-  "take_profit": [0, 0, 0],
+  "take_profit": [0, 0, 0], 
   "risk_level": "低|中|高|极高",
-  "risk_warning": ["..."],
-  "summary": "摘要"
+  "summary": "一句简短建议 (e.g. OB挂单, FVG回补入场)"
 }
 ```
 """
@@ -238,11 +246,283 @@ class DeepSeekAnalyst:
         
         logger.info(f"DeepSeek分析师初始化完成 | 模型: {model} | Max Tokens: {max_tokens}")
     
+    def _build_reasoner_prompt(
+        self,
+        symbol: str,
+        context_data: dict[str, Any]
+    ) -> str:
+        """
+        构建 DeepSeek Reasoner (R1) 专用 Prompt
+        
+        特点: 
+        - 减少角色扮演，提供纯数据
+        - 强调逻辑推理链 (Chain of Thought)
+        - 后置格式约束
+        """
+        # 1. 基础数据准备
+        current_time = datetime.now().isoformat()
+        timeframe = context_data.get("timeframe", "4h")
+        timeframe_cn = {
+            "15m": "15分钟", "1h": "1小时", "4h": "4小时", "1d": "日线", "1w": "周线"
+        }.get(timeframe, timeframe)
+        
+        # ===== K 线数据 =====
+        raw_klines = context_data.get("klines", [])
+        kline_text = ""
+        if raw_klines:
+            # P2 修复: 排除最后一根未闭合的K线，避免半完成数据误导AI判断
+            completed_klines = raw_klines[:-1] if len(raw_klines) > 1 else raw_klines
+            klines = completed_klines[-300:] # Increased from 100 to 300
+            kline_text = json.dumps([{
+                't': k['timestamp'], 'o': k['open'], 'h': k['high'],
+                'l': k['low'], 'c': k['close'], 'v': k['volume']
+            } for k in klines])
+            
+        # ===== 趋势 K 线数据 (New) =====
+        trend_context = context_data.get("trend_context", {})
+        raw_trend_klines = trend_context.get("klines", [])
+        trend_kline_text = ""
+        if raw_trend_klines:
+            # 取最后60根大周期K线 (足够看清整体结构)
+            trend_klines = raw_trend_klines[-60:]
+            trend_kline_text = json.dumps([{
+                't': k['timestamp'], 'o': k['open'], 'h': k['high'],
+                'l': k['low'], 'c': k['close']
+            } for k in trend_klines])
+        
+        # ===== K 线预计算统计 =====
+        kline_stats = ""
+        if raw_klines and len(raw_klines) >= 5:
+            recent = raw_klines[-5:]
+            consecutive = 0
+            direction = "阳" if recent[-1]['close'] >= recent[-1]['open'] else "阴"
+            for k in reversed(recent):
+                if (k['close'] >= k['open'] and direction == "阳") or (k['close'] < k['open'] and direction == "阴"):
+                    consecutive += 1
+                else:
+                    break
+            vols = [k.get('volume', 0) for k in raw_klines[-20:]]
+            vol_avg = sum(vols) / len(vols) if vols else 1
+            vol_recent = sum(vols[-3:]) / 3 if len(vols) >= 3 else vol_avg
+            vol_trend = "放量" if vol_recent > vol_avg * 1.3 else ("缩量" if vol_recent < vol_avg * 0.7 else "量能平稳")
+            kline_stats = f"连续{consecutive}根{direction}线 | 近期{vol_trend} | 最近5根波动幅度: {sum(abs(k['high']-k['low'])/k['open']*100 for k in recent)/5:.2f}%"
+            
+        # ===== 技术指标（完整版）=====
+        indicators = {
+            "rsi": context_data.get("rsi"),
+            "macd": context_data.get("macd"),
+            "ma_status": context_data.get("ma_status"),
+            "ema_status": context_data.get("ema_status"),
+            "bollinger": context_data.get("bollinger"),
+            "atr": context_data.get("atr"),
+            "rvol": context_data.get("volume_ratio", 1.0),
+            "trend_lines": context_data.get("trend_lines"),
+            "candlestick_patterns": context_data.get("candlestick_patterns"),
+            "signal_conflicts": context_data.get("signal_conflicts")
+        }
+        
+        # ===== 机构数据 =====
+        institutional = {
+            "whale_activity": context_data.get("whale_activity"),
+            "liquidity_gaps": context_data.get("liquidity_gaps"),
+            "volatility_score": context_data.get("volatility_score"),
+            "order_book": context_data.get("order_book")
+        }
+        
+        # ===== 基本面数据 (CoinGecko) =====
+        fundamentals = context_data.get("fundamental_data")
+        fundamental_text = ""
+        if fundamentals:
+            fundamental_text = f"""
+- 开发者评分: {fundamentals.get('developer_score', 'N/A')}
+- 社区评分: {fundamentals.get('community_score', 'N/A')}
+- 公众关注度: {fundamentals.get('public_interest_score', 'N/A')}
+- 24h价格变化: {fundamentals.get('price_change_24h', 0):.2f}%
+- 距历史高点: {fundamentals.get('ath_change_percentage', 0):.2f}%
+- 24h成交量: ${fundamentals.get('total_volume', 0):,.0f}
+- 市值: ${fundamentals.get('market_cap', 0):,.0f}
+""".strip()
+        
+        # ===== 合约数据 =====
+        derivatives = {}
+        if context_data.get("funding_rate") is not None:
+            derivatives["funding_rate"] = context_data["funding_rate"]
+        if context_data.get("funding_rate_history"):
+            derivatives["funding_rate_trend"] = context_data["funding_rate_history"]
+        if context_data.get("open_interest") is not None:
+            derivatives["open_interest"] = context_data["open_interest"]
+        if context_data.get("oi_change"):
+            derivatives["oi_change_24h"] = context_data["oi_change"]
+        if context_data.get("long_short_ratio") is not None:
+            derivatives["long_short_ratio"] = context_data["long_short_ratio"]
+
+        # ===== 构建 Prompt =====
+        parts = [
+            f"[数据上下文]",
+            f"交易对: {symbol}",
+            f"时间: {current_time}",
+            f"周期: {timeframe} ({timeframe_cn})",
+            f"当前价格: {context_data.get('current_price', 'N/A')}",
+        ]
+        
+        if kline_stats:
+            parts.append(f"K线统计: {kline_stats}")
+        
+        parts.extend([
+            f"\n[市场数据 (OHLCV)]",
+            kline_text,
+        ])
+        
+        if trend_kline_text:
+            parts.extend([
+                f"\n[大趋势数据 (Trend OHLC)]",
+                trend_kline_text
+            ])
+            
+        parts.extend([
+            f"\n[技术指标]",
+            json.dumps(indicators, indent=2, ensure_ascii=False),
+        ])
+        
+        if derivatives:
+            parts.extend([
+                f"\n[合约/衍生品数据]",
+                json.dumps(derivatives, indent=2, ensure_ascii=False)
+            ])
+            
+        if fundamental_text:
+            parts.extend([
+                f"\n[基本面数据 (CoinGecko)]",
+                fundamental_text
+            ])
+
+        
+        parts.extend([
+            f"\n[机构数据]",
+            json.dumps(institutional, indent=2, ensure_ascii=False),
+        ])
+        
+        # 市场情绪
+        sentiment = context_data.get("market_sentiment")
+        if sentiment:
+            parts.append(f"\n[市场情绪]\n{sentiment}")
+        
+        # 恐惧贪婪指数
+        fng = context_data.get("fear_greed_index")
+        if fng:
+            parts.append(f"\n[恐惧贪婪指数]\n指数: {fng.get('value', 50)} ({fng.get('classification', '中性')})")
+        
+        # 新闻
+        news = context_data.get("news_headlines", [])
+        if news:
+            parts.append(f"\n[新闻简报]")
+            for n in news[:5]:
+                parts.append(f"- {n}")
+        
+        # 枢轴点 + 波段高低
+        pivot = context_data.get("pivot_points")
+        if pivot:
+            parts.extend([f"\n[枢轴点]", json.dumps(pivot, indent=2)])
+        swing = context_data.get("swing_levels")
+        if swing:
+            parts.extend([f"\n[波段高低点]", json.dumps(swing, indent=2)])
+        
+        # VPVR
+        ob = context_data.get("order_book", {})
+        vpvr = ob.get("vpvr") if ob else None
+        if vpvr:
+            cp = context_data.get('current_price', 0)
+            parts.append(f"\n[筹码分布 VPVR]")
+            parts.append(f"POC(控制点): {vpvr['poc']} | 价值区间: {vpvr['val']}-{vpvr['vah']}")
+            parts.append(f"当前价{'高于' if cp > vpvr.get('poc', cp) else '低于'}POC")
+        
+        # 趋势周期
+        tc = context_data.get("trend_context")
+        if tc:
+            parts.append(f"\n[趋势周期背景]")
+            parts.append(f"趋势状态: {tc.get('trend_status')} | RSI: {tc.get('rsi', 0):.1f} | EMA21: {tc.get('ema_21', 0):.2f}")
+            parts.append(f"走势: {tc.get('summary', '')}")
+        
+        # 清算价位
+        liq = context_data.get("liquidation_levels")
+        if liq:
+            parts.append(f"\n[理论清算价位]")
+            parts.append(f"多头爆仓(50x): {liq.get('long_liq', {}).get('50x', 'N/A')} | 空头爆仓(50x): {liq.get('short_liq', {}).get('50x', 'N/A')}")
+        
+        # BTC上下文（山寨币用）
+        btc_ctx = context_data.get("btc_context")
+        if btc_ctx:
+            parts.append(f"\n[BTC 大盘走势]")
+            parts.append(f"BTC 价格: {btc_ctx.get('price')} | 趋势: {btc_ctx.get('trend')} | RSI: {btc_ctx.get('rsi', 'N/A')}")
+        
+        # ===== 分析指令 + 硬性规则 =====
+        atr_val = context_data.get('atr', 0)
+        rsi_val = context_data.get('rsi', 50)
+        
+        parts.extend([
+            f"\n[分析请求]",
+            f"请分析以上 {symbol} 的数据，判断后续{timeframe_cn}走势和交易机会。",
+            f"请使用你的推理能力进行逐步分析。",
+            f"**重要: 保持内部推理简洁，确保最终 JSON 不被截断。所有输出使用中文。**",
+            f"",
+            f"分析步骤:",
+            f"1. 根据 OHLCV、EMA、MA 分析市场结构与趋势。",
+            f"2. 使用 RSI、MACD、相对成交量评估动能。",
+            f"3. 通过订单簿、枢轴点、流动性真空区识别关键支撑/阻力位。",
+            f"4. 结合合约数据（资金费率、持仓量、多空比）判断市场偏见。",
+            f"5. 检测机构行为痕迹（巨鲸活动）。",
+            f"6. 综合所有信号制定交易计划。",
+            f"",
+            f"**硬性规则（必须遵守）**：",
+            f"- 做多: TP > Entry > SL，入场价 ≤ 当前价格",
+            f"- 做空: SL > Entry > TP，入场价 ≥ 当前价格",
+        ])
+        
+        if atr_val > 0:
+            parts.append(f"- ATR动态止损: 当前ATR={atr_val:.2f}，止损距离 ≥ 1.5*ATR={atr_val*1.5:.2f}，入场区间宽 ≈ 0.5*ATR={atr_val*0.5:.2f}")
+        
+        if rsi_val > 65:
+            parts.append(f"- ⚠️ RSI={rsi_val:.1f} 超买，禁止市价追多，请寻找回调入场")
+        elif rsi_val < 35:
+            parts.append(f"- ⚠️ RSI={rsi_val:.1f} 超卖，禁止市价追空，请寻找反弹入场")
+        
+        if tc and tc.get('trend_status'):
+            parts.append(f"- 多周期共振: 趋势周期为{tc['trend_status']}，禁止逆势激进操作")
+        
+        vol_score = context_data.get("volatility_score", 0)
+        if vol_score > 70:
+            parts.append(f"- ⚠️ 大行情风险指数={vol_score:.0f}/100 (极高)，必须在 risk_warning 中发出变盘警告")
+        
+        parts.extend([
+            f"",
+            f"[输出要求]",
+            f"推理完成后，严格按照以下 JSON 格式输出（所有文本使用中文）：",
+            f"{{",
+            f'  "symbol": "{symbol}",',
+            f'  "analysis_time": "{current_time}",',
+            f'  "timeframe": "{timeframe}",',
+            f'  "prediction": "看涨/看跌/震荡",',
+            f'  "confidence": 0-100,',
+            f'  "reasoning": ["分析要点1", "分析要点2", "分析要点3"],',
+            f'  "key_levels": {{ "strong_resistance": 0, "current_price": 0, "strong_support": 0 }},',
+            f'  "suggested_action": "做多/做空/观望",',
+            f'  "entry_zone": {{ "low": 0, "high": 0 }},',
+            f'  "stop_loss": 0,',
+            f'  "take_profit": [0, 0],',
+            f'  "risk_level": "低/中/高",',
+            f'  "risk_warning": ["风险提示1"],',
+            f'  "summary": "分析摘要"',
+            f"}}",
+        ])
+        
+        return "\n".join(parts)
+
     def _build_user_prompt(
         self,
         symbol: str,
         context_data: dict[str, Any]
     ) -> str:
+
         """
         构建用户Prompt
         
@@ -265,6 +545,7 @@ class DeepSeekAnalyst:
         Returns:
             str: 格式化后的用户Prompt
         """
+
         # 获取当前时间
         current_time = datetime.now().isoformat()
         
@@ -284,8 +565,10 @@ class DeepSeekAnalyst:
         
         # 提取 K 线摘要 (假设 context_data['klines'] 是原始列表)
         raw_klines = context_data.get("klines", [])
-        if len(raw_klines) > kline_limit:
-            klines_to_send = raw_klines[-kline_limit:]
+        # P2 修复: 排除最后一根未闭合的K线
+        completed_klines = raw_klines[:-1] if len(raw_klines) > 1 else raw_klines
+        if len(completed_klines) > kline_limit:
+            klines_to_send = completed_klines[-kline_limit:]
             kline_summary = f"最近 {kline_limit} 根分时线: Open={klines_to_send[0]['open']}, Close={klines_to_send[-1]['close']}, "
             kline_summary += f"High={max(k['high'] for k in klines_to_send)}, Low={min(k['low'] for k in klines_to_send)}"
         else:
@@ -299,7 +582,13 @@ class DeepSeekAnalyst:
             "ema": context_data.get("ema_status", "未确认"),
             "trend": context_data.get("ma_status", "neutral"),
             "vol": context_data.get("volume_24h", "n/a"),
-            "atr": round(context_data.get("atr", 0), 2)
+            "rvol": context_data.get("volume_ratio", 1.0),
+            "vol_status": context_data.get("volume_status", "normal"),
+            "atr": round(context_data.get("atr", 0), 2),
+            "adx": round(context_data.get("adx", 0), 1),
+            "adx_status": context_data.get("adx_status", ""),
+            "vwap": round(context_data.get("vwap", 0), 2),
+            "vwap_dev": f"{context_data.get('vwap_deviation', 0):+.2f}%"
         }
 
         # 3. 组装 Prompt
@@ -317,6 +606,35 @@ class DeepSeekAnalyst:
         # ========== 深度上下文 (按 depth 级别门控) ==========
         _inject_deep = depth_level >= 2      # 标准 + 深度
         _inject_advanced = depth_level >= 3   # 仅深度
+
+        # ========== 新增: 合约数据 (资金费率趋势 + 多空比) ==========
+        if _inject_deep:
+            contract_parts = []
+            fr = context_data.get("funding_rate")
+            fr_history = context_data.get("funding_rate_history")
+            if fr is not None:
+                contract_parts.append(f"- 当前资金费率: {fr*100:.4f}%")
+            if fr_history and isinstance(fr_history, dict):
+                contract_parts.append(f"- 费率趋势: {fr_history.get('trend', 'N/A')} (均值: {fr_history.get('avg_24', 0)*100:.4f}%, 近期: {fr_history.get('recent_avg', 0)*100:.4f}%)")
+            ls_ratio = context_data.get("long_short_ratio")
+            if ls_ratio is not None:
+                ls_desc = "多头优势" if ls_ratio > 1.2 else ("空头优势" if ls_ratio < 0.8 else "多空平衡")
+                contract_parts.append(f"- 多空比: {ls_ratio:.3f} ({ls_desc})")
+            oi = context_data.get("open_interest")
+            if oi:
+                contract_parts.append(f"- 持仓量: {oi:.2f}")
+            if contract_parts:
+                prompt_parts.append("\n### 合约数据 (Derivatives)")
+                prompt_parts.extend(contract_parts)
+
+        # ========== 新增: BTC 大盘上下文 ==========
+        btc_ctx = context_data.get("btc_context")
+        if _inject_deep and btc_ctx:
+            prompt_parts.append("\n### BTC 大盘背景")
+            prompt_parts.append(f"- BTC 价格: {btc_ctx.get('price')} | 涨跌幅: {btc_ctx.get('change_pct', 0):+.2f}%")
+            prompt_parts.append(f"- BTC 趋势: {btc_ctx.get('trend')} | RSI: {btc_ctx.get('rsi', 'N/A')}")
+            if btc_ctx.get('trend') == 'bearish':
+                prompt_parts.append("- ⚠️ BTC 走弱，山寨币做多需谨慎")
 
         # ========== 新增: K线形态识别 ==========
         if _inject_deep and "candlestick_patterns" in context_data and context_data["candlestick_patterns"]:
@@ -514,6 +832,13 @@ class DeepSeekAnalyst:
         if atr_val > 0:
              prompt_parts.append(f"**💡 ATR建议**：当前ATR={atr_val:.2f}。建议入场区间宽度约 {atr_val * 0.5:.2f}，止损距离约 {atr_val * 1.5:.2f}。")
 
+        # RVol 智能提示 (新增)
+        rvol = context_data.get("volume_ratio", 1.0)
+        if rvol > 2.0:
+            prompt_parts.append(f"**🔥 放量提醒**：当前相对成交量 (RVol) 为 {rvol:.2f} (Ultra High)，若突破关键位则有效性极高。")
+        elif rvol < 0.8:
+            prompt_parts.append(f"**⚠️ 缩量提醒**：当前相对成交量 (RVol) 仅 {rvol:.2f} (Low)，警惕诱多/诱空 (Fakeout)。")
+
         prompt_parts.append("\n**用户偏好设置 (必须遵守)**：")
 
         
@@ -685,25 +1010,71 @@ class DeepSeekAnalyst:
                 else:
                     result["take_profit"] = valid_tps
 
-            # --- RRR (Risk:Reward Ratio) Check ---
-            # 盈亏比 = (TP1 - Entry) / (Entry - SL)
-            # 必须 > 1.0，否则改为观望
-            try:
-                tp1 = result["take_profit"][0]
-                risk = abs(avg_entry - sl)
-                reward = abs(tp1 - avg_entry)
+            # ========== V2.0 Pro: 1:1 减仓协议与 TP1 强制校验 ==========
+            sl = float(result.get("stop_loss", 0))
+            avg_entry = (entry_low + entry_high) / 2
+            risk_dist = abs(avg_entry - sl)
+            
+            if risk_dist > 0:
+                # 强制设置 TP1 为 1:1 盈亏比位置 (保本协议)
+                tp1_target = avg_entry + risk_dist if is_long else avg_entry - risk_dist
                 
-                if risk > 0:
-                    rrr = reward / risk
-                    if rrr < 1.0:
-                        logger.warning(f"RRR过低({rrr:.2f} < 1.0), 强制降级为观望")
-                        result["prediction"] = "震荡" # 修正为合法的枚举值
-                        result["reasoning"].insert(0, f"⚠️ 风险提示: 盈亏比过低 ({rrr:.2f})，建议观望。")
-                        return result # 提前返回
+                # 如果 AI 给出的 TP1 离 1:1 太远，强制修正
+                if not tps:
+                    tps = [tp1_target, tp1_target + risk_dist * 0.5, tp1_target + risk_dist * 1.5]
+                else:
+                    # 确保第一目标是 1:1
+                    tps[0] = tp1_target
+                result["take_profit"] = tps
+
+            # --- RRR (Risk:Reward Ratio) Check (V2.0 Pro: Total RRR >= 1.5) ---
+            try:
+                final_tp = result["take_profit"][-1]
+                reward = abs(final_tp - avg_entry)
+                
+                if risk_dist > 0:
+                    rrr = reward / risk_dist
+                    if rrr < 1.5:
+                        logger.warning(f"最终RRR过低({rrr:.2f} < 1.5), 尝试上调末尾止盈或降级")
+                        if rrr < 1.0:
+                            result["prediction"] = "震荡"
+                            result["reasoning"].insert(0, f"⚠️ 严重风险: 总盈亏比({rrr:.2f})不足1.0，策略无效，已自动降级。")
+                            return result
+                        else:
+                            # 尝试微调 TP 以符合 1.5
+                            if is_long: result["take_profit"][-1] = avg_entry + risk_dist * 1.6
+                            else: result["take_profit"][-1] = avg_entry - risk_dist * 1.6
+                            result["reasoning"].insert(0, f"💡 策略优化: 已自动调整止盈位以确保收益风险比 > 1.5。")
             except Exception as e:
                 logger.error(f"RRR计算错误: {e}")
 
-            # 4. 时效性检查: 如果当前价格已经突破了 TP1 (对于该方向)
+            # ========== V2.0 Pro: VPVR 真空区止损避雷 ==========
+            vpvr = context.get("vpvr", {})
+            lvn = vpvr.get("vacuum_lvn")
+            poc = vpvr.get("poc_hvn")
+            if lvn and sl:
+                # 如果止损位落在真空区附近 (±0.5% ATR)，则认为不安全
+                atr = context.get("atr", 0) or (avg_entry * 0.01)
+                if abs(sl - lvn) < atr * 0.5:
+                    logger.warning(f"止损碰撞真空区(LVN:{lvn}), 触发防扫损修正")
+                    # 将止损向 POC 或 远离真空区的方向移动
+                    if is_long:
+                        sl = min(sl, lvn) - atr * 0.5 # 向下移离真空区
+                    else:
+                        sl = max(sl, lvn) + atr * 0.5 # 向上移离真空区
+                    result["stop_loss"] = sl
+                    result["reasoning"].append(f"🛡️ 止损保护: 检测到原止损点处于成交真空区(LVN)，已自动修正以防瞬间扫损。")
+
+            # ========== V2.0 Pro: SMC 机构锚定提示 ==========
+            obs = context.get("smc", {}).get("order_blocks", [])
+            for ob in obs:
+                # 如果入场区间触碰了 OB
+                if (ob["type"] == "bullish" and is_long) or (ob["type"] == "bearish" and is_short):
+                    if entry_low <= ob["top"] and entry_high >= ob["bottom"]:
+                        result["summary"] = f"🎯 [SMC锚定] {result.get('summary', '')} (入场区域与机构订单块重合)"
+                        break
+
+            # 4. 时效性检查: 如果当前价格已经突破了 TP1
             tps_final = result.get("take_profit", [])
             if tps_final:
                 tp1 = float(tps_final[0])
@@ -711,6 +1082,52 @@ class DeepSeekAnalyst:
                     result["reasoning"].insert(0, f"⚠️ 提示: 现价 ({current_price}) 已触及或突破目标 TP1 ({tp1})，建议等待回调入场。")
                 elif is_short and current_price <= tp1:
                     result["reasoning"].insert(0, f"⚠️ 提示: 现价 ({current_price}) 已触及或突破目标 TP1 ({tp1})，建议等待反弹入场。")
+
+            # ========== 增强: TP距离合理性检查 (幻觉检测) ==========
+            atr = context.get("atr", 0)
+            if atr > 0 and tps_final:
+                for i, tp in enumerate(tps_final):
+                    tp_distance = abs(float(tp) - avg_entry)
+                    if tp_distance > atr * 5:
+                        logger.warning(f"幻觉修正: TP{i+1}({tp}) 距离入场位过远 ({tp_distance/atr:.1f}x ATR), 限制为 3x ATR")
+                        if is_long:
+                            tps_final[i] = avg_entry + atr * 3 * (i + 1)
+                        else:
+                            tps_final[i] = avg_entry - atr * 3 * (i + 1)
+                result["take_profit"] = tps_final
+            
+            # ========== 增强: 入场区间宽度检查 ==========
+            entry_width = abs(entry_high - entry_low)
+            if atr > 0 and entry_width > atr * 2:
+                logger.warning(f"幻觉修正: 入场区间过宽 ({entry_width:.2f} > 2*ATR={atr*2:.2f}), 收窄至 0.5*ATR")
+                mid_entry = (entry_low + entry_high) / 2
+                result["entry_zone"] = {
+                    "low": mid_entry - atr * 0.25,
+                    "high": mid_entry + atr * 0.25
+                }
+
+            # ========== 增强: 置信度上下文自动校验 (P4 加严) ==========
+            confidence = result.get("confidence", 50)
+            conflicts = context.get("signal_conflicts", [])
+            if "risk_warning" not in result or not isinstance(result.get("risk_warning"), list):
+                result["risk_warning"] = []
+            if conflicts and len(conflicts) >= 3 and confidence > 60:
+                old_conf = confidence
+                confidence = min(confidence, 60)
+                result["confidence"] = confidence
+                logger.warning(f"置信度校正: {old_conf}% -> {confidence}% (存在{len(conflicts)}个信号冲突)")
+                result["risk_warning"].append(f"指标信号冲突较多({len(conflicts)}个), 置信度已自动降至{confidence}%")
+            elif conflicts and len(conflicts) >= 2 and confidence > 70:
+                old_conf = confidence
+                confidence = min(confidence, 70)
+                result["confidence"] = confidence
+                logger.warning(f"置信度校正: {old_conf}% -> {confidence}% (存在{len(conflicts)}个信号冲突)")
+                result["risk_warning"].append(f"存在{len(conflicts)}个信号冲突, 置信度已降至{confidence}%")
+            elif conflicts and len(conflicts) >= 1 and confidence > 85:
+                old_conf = confidence
+                confidence = min(confidence, 80)
+                result["confidence"] = confidence
+                logger.warning(f"置信度校正: {old_conf}% -> {confidence}% (存在{len(conflicts)}个信号冲突)")
 
             # ========== BUG-2/BUG-4: key_levels 校验与锚定 ==========
             result = self._validate_key_levels(result, context)
@@ -885,21 +1302,48 @@ class DeepSeekAnalyst:
             ValueError: JSON解析失败或格式不符合预期时抛出
         """
         try:
-            # 尝试提取JSON（处理可能的markdown代码块包裹）
+            # 增强的JSON提取逻辑 (适配 R1/Chat 各种输出情况)
             text = response_text.strip()
             
-            # 移除可能的markdown代码块标记
-            if text.startswith("```json"):
-                text = text[7:]
-            elif text.startswith("```"):
-                text = text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
-            
-            text = text.strip()
-            
-            # 解析JSON
-            data = json.loads(text)
+            # [新增] 专门处理 DeepSeek R1 的 <think> 标签
+            # 移除思维链内容，只保留最终 JSON
+            if "<think>" in text:
+                import re
+                # 匹配 <think>...<think> (完整) 或 <think>... (截断)
+                # re.DOTALL 让 . 匹配换行符
+                text = re.sub(r"<think>.*?(?:</think>|$)", "", text, flags=re.DOTALL).strip()
+
+            # 1. 尝试直接解析
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                # 2. 尝试寻找第一个 '{' 并使用 raw_decode 解析
+                start_idx = text.find('{')
+                if start_idx != -1:
+                    try:
+                        decoder = json.JSONDecoder()
+                        data, _ = decoder.raw_decode(text, start_idx)
+                    except json.JSONDecodeError as e:
+                        # 如果 raw_decode 失败，尝试最后的手段：手动提取最外层大括号
+                        # 这主要处理 raw_decode 可能因为非标准格式失败的情况
+                        logger.warning(f"raw_decode失败，尝试暴力提取: {e}")
+                        
+                        logger.error(f"raw_decode失败，尝试暴力提取: {e} | 响应前500字: {text[:500]}")
+
+                        end_idx = text.rfind('}')
+                        if end_idx != -1 and end_idx > start_idx:
+                            sub_text = text[start_idx : end_idx + 1]
+                            try:
+                                data = json.loads(sub_text)
+                            except:
+                                # 尝试修复常见的 JSON 错误 (如同为 False, 尾部逗号)
+                                # 这里可以引入更复杂的修复逻辑，或者直接报错
+                                raise ValueError(f"无法解析提取的JSON片段: {e}")
+                        else:
+                            raise ValueError("无法找到闭合的大括号")
+                else:
+                    logger.error(f"响应中未找到JSON对象起始符 | 响应前500字: {text[:500]}")
+                    raise ValueError("响应中未找到JSON对象起始符 '{'")
             
             # 补齐可能缺失的字段 (Pydantic 校验要求)
             if "analysis_time" not in data:
@@ -930,9 +1374,11 @@ class DeepSeekAnalyst:
             raise ValueError(f"响应处理失败: {e}")
     
     @retry(
-        stop=stop_after_attempt(5),
+        stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((APITimeoutError, APIConnectionError, EmptyResponseError, ValueError))
+        # C-3 修复: 减少重试次数(5→3)，移除 ValueError 防止 JSON 解析错误无限重试
+        # 内部已有 R1→V3 降级循环(2次)，外层3次总计最多6次 API 调用
+        retry=retry_if_exception_type((APITimeoutError, APIConnectionError, EmptyResponseError, APIError))
     )
     async def analyze_market(
         self,
@@ -961,102 +1407,108 @@ class DeepSeekAnalyst:
         """
         logger.info(f"开始分析 {symbol}...")
         
-        # 构建用户Prompt
-        user_prompt = self._build_user_prompt(symbol, context_data)
-        logger.debug(f"用户Prompt构建完成，长度: {len(user_prompt)} 字符")
-        
         # [配置动态覆盖]
-        # 检查是否传入了自定义模型或提示词模板
+        # 1. 先确定使用的模型
         current_model = self.model
         current_system_prompt = self.system_prompt
         
-        if "user_preferences" in context_data:
-            prefs = context_data["user_preferences"]
+        prefs = context_data.get("user_preferences", {})
+        if prefs:
             if prefs.get("model"):
                 current_model = prefs["model"]
                 logger.info(f"使用用户指定模型: {current_model}")
             
+            # CRIT-1 Fix: Initialize prefs early to ensure it's available for metadata injection later
+            # This block was moved up, but the original `prefs` initialization was already there.
+            # The instruction's `prefs.get("promptTemplate")` uses a different key casing.
+            # Sticking to `prompt_template` for consistency with existing code.
             if prefs.get("prompt_template"):
-                # 如果是完整模板字符串，替换系统提示词
-                # 注意：这里假设前端传的是完整的系统提示词
                 custom_prompt = prefs["prompt_template"]
                 if len(custom_prompt) > 50: # 简单长度检查
                     current_system_prompt = custom_prompt
                     logger.info("使用用户自定义提示词模板")
-        
-        try:
-            # 调用DeepSeek API (异步)
-            response = await self.client.chat.completions.create(
-                model=current_model,
-                messages=[
-                    {"role": "system", "content": current_system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                response_format={"type": "json_object"}  # 强制JSON输出
-            )
-            
-            # 提取响应内容
-            if not response.choices:
-                logger.warning(f"API返回choices为空: {response.id}")
-                raise EmptyResponseError("API returned no choices")
-            
-            choice = response.choices[0]
-            
-            # Check for DeepSeek R1 reasoning content (even if standard content is empty)
-            reasoning_content = getattr(choice.message, 'reasoning_content', None)
-            if reasoning_content:
-                logger.info(f"检测到思维链内容 (Reasoning Content): {len(reasoning_content)} chars")
-                # Note: We can't use reasoning_content as JSON, but it explains why length limit was hit
-                
-            if not choice.message.content:
-                reason = choice.finish_reason
-                logger.warning(f"API返回内容为空: {response.id} | Reason: {reason}")
-                
-                # If reason is length, it means reasoning took too long and squeezed out content
-                if reason == 'length':
-                     raise EmptyResponseError(f"API output truncated (Max tokens reached). Reasoning consumed tokens? model={self.model}")
 
-                raise EmptyResponseError(f"API returned empty content (Finish Reason: {reason})")
-                
-            response_text = choice.message.content
-            
-            logger.debug(f"API响应接收成功，长度: {len(response_text)} 字符")
-            
-            # 解析响应
-            result = self._parse_response(response_text, context_data)
-            
-            # [新增] 注入 AI 配置元数据
-            result.ai_model = current_model
-            result.ai_prompt_template = "自定义模板" if prefs.get("prompt_template") else "系统默认"
-            
-            # ========== 注入透传上下文 (Explicit Injection) ==========
-            # 确保这些非AI生成的硬数据能传回前端，供UI渲染
-            if context_data.get("trend_context"):
-                result.trend_context = context_data["trend_context"]
-            
-            if context_data.get("order_book"):
-                result.order_book_context = context_data["order_book"]
-            # =======================================================
-            
-            return result
-            
-        except EmptyResponseError as e:
-            logger.warning(f"空响应错误 (Retrying...): {e}")
-            raise  # 会触发自动重试
+        # 2. 自动降级策略循环 (R1 -> V3)
+        # 如果 R1 失败 (超时/截断/解析错误)，自动降级到 V3
+        active_model = current_model
+        # 保存原始 System Prompt 以便降级时恢复
+        base_system_prompt = current_system_prompt
 
-        except APITimeoutError as e:
-            logger.warning(f"API请求超时: {e}")
-            raise  # 会触发自动重试
+        for attempt in range(2):
+            try:
+                # --- A. 根据模型构建 Prompt ---
+                temp_system_prompt = base_system_prompt
+                
+                if "reasoner" in active_model:
+                    # R1 模型: 使用推理专用 Prompt
+                    user_prompt = self._build_reasoner_prompt(symbol, context_data)
+                    # R1 复用完整中文系统提示词（除非用户自定义）
+                    # 修复: 不再使用英文简化版，避免系统指令与用户提示词语言不一致
+                else:
+                    # V3/Chat 模型: 使用标准 Prompt
+                    user_prompt = self._build_user_prompt(symbol, context_data)
+
+                logger.debug(f"Prompt构建完成 (Attempt {attempt+1}) | 模型: {active_model} | SystemPrompt长度: {len(temp_system_prompt)}")
+                
+                # --- B. 计算 Max Tokens ---
+                request_max_tokens = self.max_tokens
+                if "reasoner" in active_model and request_max_tokens < 8000:
+                    request_max_tokens = 8192
+                    logger.info(f"为 R1 模型自适应调整 Max Tokens: {request_max_tokens}")
+
+                # --- C. 调用 API ---
+                response = await self.client.chat.completions.create(
+                    model=active_model,
+                    messages=[
+                        {"role": "system", "content": temp_system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=self.temperature,
+                    max_tokens=request_max_tokens
+                )
+                
+                # --- D. 验证响应 ---
+                if not response.choices:
+                    raise EmptyResponseError("API returned no choices")
+                
+                choice = response.choices[0]
+                if not choice.message.content:
+                    reason = choice.finish_reason
+                    if reason == 'length':
+                        raise EmptyResponseError(f"API output truncated (Max tokens reached). model={active_model}")
+                    raise EmptyResponseError(f"API returned empty content (Finish Reason: {reason})")
+                    
+                response_text = choice.message.content
+                logger.debug(f"API响应接收成功，长度: {len(response_text)} 字符")
+                
+                # --- E. 解析响应 ---
+                result = self._parse_response(response_text, context_data)
+                
+                # --- F. 注入元数据 ---
+                result.ai_model = active_model
+                result.ai_prompt_template = "自定义模板" if prefs.get("prompt_template") else ("系统默认(R1)" if "reasoner" in active_model else "系统默认")
+                
+                # 注入透传上下文
+                if context_data.get("trend_context"):
+                    result.trend_context = context_data["trend_context"]
+                if context_data.get("order_book"):
+                    result.order_book_context = context_data["order_book"]
+                
+                return result
+
+            except (EmptyResponseError, ValueError, APITimeoutError, APIConnectionError, APIError) as e:
+                logger.warning(f"模型 {active_model} 调用失败: {e}")
+                
+                # 如果是 R1 且是第一次尝试，则降级
+                if "reasoner" in active_model and attempt == 0:
+                    logger.warning(">>> 正在自动降级到 DeepSeek-Chat (V3) 模型重试...")
+                    active_model = "deepseek-chat"
+                    continue
+                
+                # 否则抛出异常给上层处理
+                raise
             
-        except APIConnectionError as e:
-            logger.warning(f"网络连接错误: {e}")
-            raise  # 会触发自动重试
-            
-        except APIError as e:
-            logger.error(f"DeepSeek API错误: {e.status_code} - {e.message}")
-            raise
+        # (其余异常处理已合并至上方循环)
     
     async def analyze_market_stream(
         self,
@@ -1079,25 +1531,41 @@ class DeepSeekAnalyst:
             >>> async for chunk in analyst.analyze_market_stream("ETHUSDT", context):
             ...     print(chunk, end="", flush=True)
         """
-        user_prompt = self._build_user_prompt(symbol, context_data)
-        
         # [配置动态覆盖]
+        # 1. 先确定使用的模型
         current_model = self.model
         current_system_prompt = self.system_prompt
         
-        if "user_preferences" in context_data:
-            prefs = context_data["user_preferences"]
+        prefs = context_data.get("user_preferences", {})
+        
+        if prefs:
             if prefs.get("model"):
                 current_model = prefs["model"]
                 logger.info(f"使用用户指定模型 (流式): {current_model}")
             
+            # Sticking to `prompt_template` for consistency with existing code.
             if prefs.get("prompt_template"):
                 custom_prompt = prefs["prompt_template"]
                 if len(custom_prompt) > 50:
                     current_system_prompt = custom_prompt
                     logger.info("使用用户自定义提示词模板 (流式)")
 
+        # 2. 根据模型选择 Prompt 构建器
+        if "reasoner" in current_model:
+            # R1 模型
+            user_prompt = self._build_reasoner_prompt(symbol, context_data)
+            # P1 修复: 不再覆盖为英文简化版，统一使用完整中文 SYSTEM_PROMPT
+            # 与非流式 analyze_market 保持一致
+        else:
+            # V3/Chat 模型
+            user_prompt = self._build_user_prompt(symbol, context_data)
+            
         try:
+            # R1 模型通常需要更长的 Token 窗口进行推理
+            request_max_tokens = self.max_tokens
+            if "reasoner" in current_model and request_max_tokens < 8000:
+                request_max_tokens = 8192
+
             stream = await self.client.chat.completions.create(
                 model=current_model,
                 messages=[
@@ -1105,20 +1573,47 @@ class DeepSeekAnalyst:
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=self.temperature,
-                max_tokens=self.max_tokens,
+                max_tokens=request_max_tokens,
                 stream=True
             )
             
+            # MED-6 Fix: Accumulate full response for caching
+            full_content = []
+            
             async for chunk in stream:
-                if chunk.choices[0].delta.content:
+                # CRIT-2 Fix: Check if choices exists and is not empty
+                if chunk.choices and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     yield content
+                    full_content.append(content)
             
-            # 流式结束后返回完整解析结果
-            # 可以在调用方处理完整响应
-            
+            # MED-6 Fix: Cache the complete result to avoid double-spending API credits
+            if full_content:
+                complete_text = "".join(full_content)
+                try:
+                    # Parse to ensure it's valid JSON before caching
+                    result = self._parse_response(complete_text, context_data)
+                    
+                    # Inject config metadata same as analyze_market
+                    result.ai_model = current_model
+                    result.ai_prompt_template = "自定义模板" if prefs and prefs.get("prompt_template") else "系统默认"
+                    
+                    if context_data.get("trend_context"):
+                        result.trend_context = context_data["trend_context"]
+                    if context_data.get("order_book"):
+                        result.order_book_context = context_data["order_book"]
+                        
+                    # Save to cache
+                    # Fix Circular Import: Import locally
+                    from app.services.cache_service import get_cached_analyzer
+                    await get_cached_analyzer().cache_analysis(symbol, result)
+                    logger.info(f"Stream analysis cached for {symbol}")
+                except Exception as e:
+                    logger.warning(f"Failed to cache stream result: {e}")
+                    
         except Exception as e:
-            logger.error(f"流式分析失败: {e}")
+            logger.error(f"DeepSeek流式分析失败: {e}")
+            yield f"\n[ERROR] 分析请求失败: {str(e)}"
             raise
 
 

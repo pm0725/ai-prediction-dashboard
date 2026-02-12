@@ -32,7 +32,7 @@
         </div>
         <div class="header-right">
           <el-tag :type="riskTagType" size="small" effect="dark">
-            <span class="font-display">风险{{ prediction.risk_level }}</span>
+            <span class="font-display">风险{{ localizeRiskLevel(prediction.risk_level) }}</span>
           </el-tag>
           <span class="analysis-time font-tabular">{{ formattedTime }}</span>
         </div>
@@ -51,7 +51,7 @@
         <div class="direction-text">
           <span class="direction-label font-display">预测方向</span>
           <span class="direction-value font-display" :class="predictionClass">
-            {{ prediction.prediction }}
+            {{ localizePrediction(prediction.prediction) }}
           </span>
         </div>
       </div>
@@ -137,7 +137,7 @@
     <div class="trading-signals" v-if="prediction.trading_signals?.length">
       <div class="signal-card" v-for="(signal, idx) in prediction.trading_signals" :key="idx">
         <div class="signal-header">
-          <span class="signal-type font-display" :class="signal.type.toLowerCase()">{{ signal.type }}</span>
+          <span class="signal-type font-display" :class="signal.type.toLowerCase()">{{ localizeSignalType(signal.type) }}</span>
           <span class="signal-risk font-tabular">R:R {{ signal.risk_reward_ratio || '-' }}</span>
         </div>
         <div class="signal-details font-tabular">
@@ -224,7 +224,7 @@
         <div class="strategy-content font-tabular">
           <div class="strategy-row">
             <span class="strategy-label font-display">建议操作：</span>
-            <span class="strategy-value action font-display">{{ prediction.suggested_action }}</span>
+            <span class="strategy-value action font-display">{{ localizeAction(prediction.suggested_action) }}</span>
           </div>
           <div class="strategy-row" v-if="prediction.entry_zone">
             <span class="strategy-label font-display">入场区间：</span>
@@ -432,12 +432,53 @@ const confidenceColors = [
  * 风险标签类型
  */
 const riskTagType = computed(() => {
-  const level = props.prediction.risk_level
-  if (level === '低') return 'success'
-  if (level === '中') return 'warning'
-  if (level === '高') return 'danger'
+  const level = (props.prediction.risk_level || '').toLowerCase()
+  if (level === '低' || level === 'low') return 'success'
+  if (level === '中' || level === 'medium') return 'warning'
+  if (level === '高' || level === 'high') return 'danger'
   return 'danger' // 极高
 })
+
+// ============================================================
+// 中英文映射工具函数
+// ============================================================
+
+const riskLevelMap: Record<string, string> = {
+  'low': '低', 'medium': '中', 'high': '高', 'extreme': '极高',
+  '低': '低', '中': '中', '高': '高', '极高': '极高'
+}
+function localizeRiskLevel(level: string): string {
+  return riskLevelMap[level?.toLowerCase()] || level || '中'
+}
+
+const predictionMap: Record<string, string> = {
+  'bullish': '看涨', 'strong_bullish': '强烈看涨',
+  'bearish': '看跌', 'strong_bearish': '强烈看跌',
+  'neutral': '震荡',
+  '看涨': '看涨', '强烈看涨': '强烈看涨',
+  '看跌': '看跌', '强烈看跌': '强烈看跌',
+  '震荡': '震荡'
+}
+function localizePrediction(pred: string): string {
+  return predictionMap[pred?.toLowerCase()] || pred || '震荡'
+}
+
+const actionMap: Record<string, string> = {
+  'buy': '做多', 'sell': '做空', 'wait': '观望', 'hold': '观望',
+  'long': '做多', 'short': '做空',
+  '做多': '做多', '做空': '做空', '观望': '观望'
+}
+function localizeAction(action: string): string {
+  return actionMap[action?.toLowerCase()] || action || '观望'
+}
+
+const signalTypeMap: Record<string, string> = {
+  'long': '做多', 'short': '做空', 'wait': '观望',
+  'buy': '买入', 'sell': '卖出', 'hold': '持有'
+}
+function localizeSignalType(type: string): string {
+  return signalTypeMap[type?.toLowerCase()] || type
+}
 
 // ============================================================
 // 方法

@@ -28,7 +28,8 @@ class VolatilityMonitor:
         
         # History: { symbol: deque([(timestamp, price, volume), ...]) }
         # stores (ts, price, volume_since_last_tick)
-        self.history: Dict[str, deque] = defaultdict(deque)
+        # MED-4 Fix: Limit history size to prevent memory leaks
+        self.history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
         
         # Cooldown: { symbol: (last_alert_timestamp, last_alert_type) }
         self.alert_state: Dict[str, tuple] = {}

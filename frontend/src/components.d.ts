@@ -24,6 +24,9 @@ declare module 'vue' {
     ElConfigProvider: typeof import('element-plus/es')['ElConfigProvider']
     ElContainer: typeof import('element-plus/es')['ElContainer']
     ElDialog: typeof import('element-plus/es')['ElDialog']
+    ElDropdown: typeof import('element-plus/es')['ElDropdown']
+    ElDropdownItem: typeof import('element-plus/es')['ElDropdownItem']
+    ElDropdownMenu: typeof import('element-plus/es')['ElDropdownMenu']
     ElEmpty: typeof import('element-plus/es')['ElEmpty']
     ElFooter: typeof import('element-plus/es')['ElFooter']
     ElForm: typeof import('element-plus/es')['ElForm']
@@ -68,5 +71,6 @@ declare module 'vue' {
     StrategyBoard: typeof import('./components/StrategyBoard.vue')['default']
     SymbolSelector: typeof import('./components/SymbolSelector.vue')['default']
     TacticalExecutionHUD: typeof import('./components/TacticalExecutionHUD.vue')['default']
+    WarRoomDashboard: typeof import('./components/WarRoomDashboard.vue')['default']
   }
 }

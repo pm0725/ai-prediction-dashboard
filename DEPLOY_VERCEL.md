@@ -46,7 +46,7 @@
 
 2. **导入项目**
    - 点击 **"Add New..."** -> **"Project"**。
-   - 选择你的 `ai-prediction` Github 仓库。
+   - 选择你的 `ai-prediction` Github
 
 3. **配置项目**
    - **Framework Preset**: Vite
