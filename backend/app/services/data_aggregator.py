@@ -2017,6 +2017,8 @@ async def prepare_context_for_ai(
     df_main = results[0]
     if isinstance(df_main, Exception):
         logger.error(f"核心数据获取失败 (Main Klines): {df_main}")
+        import traceback
+        logger.error(f"Main Klines Traceback: {traceback.format_tb(df_main.__traceback__)}")
         raise df_main
     
     # 2. 趋势K线 (可选)
