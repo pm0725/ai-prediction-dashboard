@@ -1938,8 +1938,10 @@ async def prepare_context_for_ai(
     
     logger.info(f"开始聚合 {symbol} 市场数据 ({timeframe})...")
     
-    # 初始化数据获取器
-    fetcher = BinanceDataFetcher(api_key, api_secret)
+    # 初始化数据获取器 (使用全局单例，避免重复创建连接)
+    fetcher = await get_global_fetcher(api_key, api_secret)
+    # 确保 Session 已启动
+    await fetcher.start_session()
     
     # 确定趋势周期
     trend_timeframe = "1d"
@@ -1955,7 +1957,7 @@ async def prepare_context_for_ai(
     
     try:
         # 显式启动 Session 以供并发任务复用连接
-        await fetcher.start_session()
+        # await fetcher.start_session() # 上面已调用
         
         # 并行获取数据任务
         # 1. 主周期K线 (300根以支持更长AI上下文)
@@ -2009,7 +2011,7 @@ async def prepare_context_for_ai(
         
     finally:
         # 确保 Session 关闭
-        await fetcher.close_session()
+        # await fetcher.close_session() # 全局单例不需要关闭
         await shared_http_session.close()
         
     # 解析结果 (容错处理)
