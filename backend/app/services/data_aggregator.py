@@ -1948,24 +1948,6 @@ async def prepare_context_for_ai(
     elif timeframe == "15m" or timeframe == "1h":
         trend_timeframe = "4h"
     
-    # 并行获取数据任务
-    # 1. 主周期K线 (300根以支持更长AI上下文)
-    main_kline_task = fetcher.get_klines(symbol, interval=timeframe, limit=300)
-    # 2. 趋势周期K线
-    trend_kline_task = fetcher.get_klines(symbol, interval=trend_timeframe, limit=300)
-    # 3. 基础数据
-    funding_task = fetcher.get_funding_rate(symbol)
-    open_interest_task = fetcher.get_open_interest(symbol)
-    ls_ratio_task = fetcher.get_long_short_ratio(symbol)
-    # 4. 订单簿
-    order_book_task = fetcher.get_order_book(symbol)
-    
-    # 5. [新] 逐笔成交 (Whale Data)
-    trades_task = fetcher.get_agg_trades(symbol, limit=1000)
-
-    # P3 优化: BTC 上下文获取加入并行任务组（山寨币时复用已有 fetcher）
-    is_altcoin = symbol not in ("BTCUSDT", "BTCUSD")
-    btc_kline_task = fetcher.get_klines("BTCUSDT", interval="4h", limit=30) if is_altcoin else None
     
     # 执行所有请求
     import aiohttp
@@ -1975,6 +1957,24 @@ async def prepare_context_for_ai(
         # 显式启动 Session 以供并发任务复用连接
         await fetcher.start_session()
         
+        # 并行获取数据任务
+        # 1. 主周期K线 (300根以支持更长AI上下文)
+        main_kline_task = fetcher.get_klines(symbol, interval=timeframe, limit=300)
+        # 2. 趋势周期K线
+        trend_kline_task = fetcher.get_klines(symbol, interval=trend_timeframe, limit=300)
+        # 3. 基础数据
+        funding_task = fetcher.get_funding_rate(symbol)
+        open_interest_task = fetcher.get_open_interest(symbol)
+        ls_ratio_task = fetcher.get_long_short_ratio(symbol)
+        # 4. 订单簿
+        order_book_task = fetcher.get_order_book(symbol)
+        # 5. [新] 逐笔成交 (Whale Data)
+        trades_task = fetcher.get_agg_trades(symbol, limit=1000)
+
+        # P3 优化: BTC 上下文获取加入并行任务组（山寨币时复用已有 fetcher）
+        is_altcoin = symbol not in ("BTCUSDT", "BTCUSD")
+        btc_kline_task = fetcher.get_klines("BTCUSDT", interval="4h", limit=30) if is_altcoin else None
+
         # 组装任务列表
         tasks = [
             main_kline_task,                 # 0

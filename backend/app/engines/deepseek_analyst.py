@@ -433,8 +433,14 @@ class DeepSeekAnalyst:
         if vpvr:
             cp = context_data.get('current_price', 0)
             parts.append(f"\n[筹码分布 VPVR]")
-            parts.append(f"POC(控制点): {vpvr['poc']} | 价值区间: {vpvr['val']}-{vpvr['vah']}")
-            parts.append(f"当前价{'高于' if cp > vpvr.get('poc', cp) else '低于'}POC")
+            # Fix KeyError: 'poc' -> use 'hvn'
+            poc = vpvr.get('hvn', vpvr.get('poc', 0))
+            lvn = vpvr.get('lvn', 0)
+            
+            # 兼容旧逻辑或简化显示
+            parts.append(f"POC(控制点/筹码峰): {poc} | 真空区(LVN): {lvn}")
+            if poc:
+                parts.append(f"当前价{'高于' if cp > poc else '低于'}POC")
         
         # 趋势周期
         tc = context_data.get("trend_context")
@@ -703,10 +709,15 @@ class DeepSeekAnalyst:
             # 显示 VPVR
             if "vpvr" in ob:
                 vpvr = ob["vpvr"]
+                # Fix KeyError: 'poc' -> use 'hvn'
+                poc = vpvr.get('hvn', vpvr.get('poc', 0))
+                lvn = vpvr.get('lvn', 0)
+                
                 prompt_parts.append("\n- 📊 筹码分布 (VPVR):")
-                prompt_parts.append(f"  * POC (控制点/最强支撑阻力): {vpvr['poc']}")
-                prompt_parts.append(f"  * 价值区间 (70%成交区): {vpvr['val']} - {vpvr['vah']}")
-                prompt_parts.append(f"  * 状态: 当前价{'高于' if context_data.get('current_price', 0) > vpvr['poc'] else '低于'} POC")
+                prompt_parts.append(f"  * POC (控制点/筹码峰): {poc}")
+                prompt_parts.append(f"  * 真空区 (LVN): {lvn}")
+                if poc:
+                    prompt_parts.append(f"  * 状态: 当前价{'高于' if context_data.get('current_price', 0) > poc else '低于'} POC")
         
         # 添加清算风险估算 (新增)
         if _inject_advanced and "liquidation_levels" in context_data:
